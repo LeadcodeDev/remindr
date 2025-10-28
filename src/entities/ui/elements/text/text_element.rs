@@ -16,7 +16,10 @@ use uuid::Uuid;
 use crate::{
     Utils,
     controllers::drag_controller::DragElement,
-    entities::ui::elements::{ElementNode, ElementNodeParser, RemindrElement},
+    entities::ui::{
+        elements::{ElementNode, ElementNodeParser, RemindrElement},
+        menu::Menu,
+    },
     states::document_state::ViewState,
 };
 
@@ -25,6 +28,8 @@ pub struct TextElement {
     pub data: TextElementData,
     input_state: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
+    _show_contextual_menu: bool,
+    menu: Entity<Menu>,
 }
 
 impl ElementNodeParser for TextElement {
@@ -32,11 +37,14 @@ impl ElementNodeParser for TextElement {
         let data = from_value::<TextElementData>(data.clone())?;
 
         let (input_state, _subscriptions) = Self::init(data.metadata.content.clone(), window, cx);
+        let menu = cx.new(|cx| Menu::new(window, cx));
 
         Ok(Self {
             data,
             input_state,
             _subscriptions,
+            _show_contextual_menu: false,
+            menu,
         })
     }
 }
@@ -45,6 +53,7 @@ impl TextElement {
     pub fn new(id: Uuid, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
         let content = SharedString::new("");
         let (input_state, _subscriptions) = Self::init(content.clone(), window, cx);
+        let menu = cx.new(|cx| Menu::new(window, cx));
 
         Ok(Self {
             data: TextElementData {
@@ -53,6 +62,8 @@ impl TextElement {
             },
             input_state,
             _subscriptions,
+            _show_contextual_menu: false,
+            menu,
         })
     }
 
@@ -81,6 +92,12 @@ impl TextElement {
 
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input_state = self.input_state.read(cx);
+
+        self._show_contextual_menu = if input_state.value().ends_with("/") {
+            true
+        } else {
+            false
+        };
 
         if self.data.metadata.content.is_empty() && input_state.value().is_empty() {
             cx.update_global::<ViewState, _>(|view_state, cx| {
@@ -149,11 +166,17 @@ impl TextElement {
 
 impl Render for TextElement {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().min_w(px(820.0)).w_full().child(
-            TextInput::new(&self.input_state)
-                .bordered(false)
-                .bg(transparent_white()),
-        )
+        div()
+            .min_w(px(820.0))
+            .w_full()
+            .child(
+                TextInput::new(&self.input_state)
+                    .bordered(false)
+                    .bg(transparent_white()),
+            )
+            .when(self._show_contextual_menu, |this| {
+                this.child(self.menu.clone())
+            })
     }
 }
 

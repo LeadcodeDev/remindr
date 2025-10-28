@@ -159,6 +159,7 @@ impl Render for DragElement {
         let is_dragging = controller.is_dragging;
         let hovered_drop_zone = controller.hovered_drop_zone.clone();
 
+        let id = self.id;
         let child = self.child.clone();
         // let element = cx.new(|_| match self.child.clone() {
         //     RemindrElement::Text(element) => element,
@@ -204,19 +205,6 @@ impl Render for DragElement {
                     });
                 }),
             )
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.update_global::<ViewState, _>(|state, _| {
-                        let controller = &mut state.current.as_mut().unwrap().drag_controller;
-
-                        controller.dragging_id = Some(this.id);
-                        controller.is_dragging = true;
-                    });
-
-                    cx.notify();
-                }),
-            )
             .child(
                 div()
                     .invisible()
@@ -258,6 +246,13 @@ impl Render for DragElement {
                             .on_drag(
                                 child.clone(),
                                 move |element, _, _window: &mut Window, cx: &mut App| {
+                                    cx.update_global::<ViewState, _>(|state, _| {
+                                        let controller =
+                                            &mut state.current.as_mut().unwrap().drag_controller;
+
+                                        controller.dragging_id = Some(id);
+                                        controller.is_dragging = true;
+                                    });
                                     cx.new(|_| element.clone())
                                 },
                             ),
@@ -277,6 +272,7 @@ impl Render for DragElement {
                                     .absolute()
                                     .top(px(-2.0))
                                     .h(px(4.0))
+                                    .debug_blue()
                                     .w_full()
                                     .border_color(cx.theme().accent_foreground.opacity(0.5))
                                     .tab_index(10),
@@ -286,6 +282,7 @@ impl Render for DragElement {
                                     .absolute()
                                     .bottom(px(-2.0))
                                     .h(px(4.0))
+                                    .debug_blue()
                                     .w_full()
                                     .bg(cx.theme().accent_foreground.opacity(0.5))
                                     .tab_index(10),
