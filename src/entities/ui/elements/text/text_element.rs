@@ -1,14 +1,8 @@
 use std::f64::INFINITY;
 
 use anyhow::{Error, Ok};
-use gpui::{
-    AppContext, BorrowAppContext, Context, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Window, div, prelude::FluentBuilder, px, transparent_white,
-};
-use gpui_component::{
-    StyledExt,
-    input::{InputEvent, InputState, TextInput},
-};
+use gpui::{prelude::FluentBuilder, *};
+use gpui_component::input::{Input, InputEvent, InputState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
@@ -30,6 +24,7 @@ pub struct TextElement {
     _subscriptions: Vec<Subscription>,
     _show_contextual_menu: bool,
     menu: Entity<Menu>,
+    is_focus: bool,
 }
 
 impl ElementNodeParser for TextElement {
@@ -45,6 +40,7 @@ impl ElementNodeParser for TextElement {
             _subscriptions,
             _show_contextual_menu: false,
             menu,
+            is_focus: false,
         })
     }
 }
@@ -64,6 +60,7 @@ impl TextElement {
             _subscriptions,
             _show_contextual_menu: false,
             menu,
+            is_focus: false,
         })
     }
 
@@ -81,6 +78,7 @@ impl TextElement {
 
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Focus => this.is_focus = true,
                 InputEvent::Change => this.on_change(window, cx),
                 InputEvent::PressEnter { .. } => this.on_press_enter(window, cx),
                 _ => {}
@@ -91,15 +89,38 @@ impl TextElement {
     }
 
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input_state = self.input_state.read(cx);
+        let input_state_value = self.input_state.read(cx).value();
+        let input_state_owned = input_state_value.clone();
+        let input_state_str = input_state_owned.as_str();
 
-        self._show_contextual_menu = if input_state.value().ends_with("/") {
-            true
+        let show_menu = if let Some(last_slash_idx) = input_state_str.rfind('/') {
+            let next_char_idx = last_slash_idx + 1;
+            if next_char_idx == input_state_str.len() {
+                true
+            } else {
+                input_state_str
+                    .chars()
+                    .nth(next_char_idx)
+                    .map_or(false, |c| c != ' ')
+            }
         } else {
             false
         };
 
-        if self.data.metadata.content.is_empty() && input_state.value().is_empty() {
+        self._show_contextual_menu = show_menu && self.is_focus;
+
+        if show_menu {
+            let search_query = input_state_str
+                .rfind('/')
+                .map(|idx| SharedString::from(input_state_str[idx + 1..].to_string()))
+                .unwrap_or_default();
+            self.menu
+                .update(cx, |state, _| state.search = Some(search_query));
+        } else {
+            self.menu.update(cx, |state, _| state.search = None);
+        }
+
+        if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
             cx.update_global::<ViewState, _>(|view_state, cx| {
                 if let Some(current_doc_state) = view_state.current.as_mut() {
                     let elements_rc_clone = &mut current_doc_state.elements;
@@ -126,11 +147,16 @@ impl TextElement {
                 }
             });
         } else {
-            self.data.metadata.content = input_state.value();
+            self.data.metadata.content = input_state_value;
         }
     }
 
-    fn on_press_enter(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_press_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_state.update(cx, |state, cx| {
+            let value = state.value();
+            state.set_value(value.trim().to_string(), window, cx);
+        });
+
         let id = Utils::generate_uuid();
         let state = cx.global::<ViewState>().current.as_ref().unwrap();
 
@@ -143,7 +169,7 @@ impl TextElement {
 
         let text_element = cx.new(|cx| TextElement::new(id, window, cx).unwrap());
         let element = RemindrElement::Text(text_element.clone());
-        let drag_element = cx.new(|_| DragElement::new(id, element));
+        let drag_element = cx.new(|cx| DragElement::new(id, element, cx));
         let element_node = ElementNode::with_id(id, drag_element);
 
         cx.update_global::<ViewState, _>(|this, _| {
@@ -154,7 +180,13 @@ impl TextElement {
                 .insert(insertion_index, element_node);
         });
 
-        text_element.update(cx, |this, cx| this.focus(window, cx));
+        self.is_focus = false;
+        self._show_contextual_menu = false;
+        self.menu.update(cx, |state, _| state.search = None);
+
+        text_element.update(cx, |this, cx| {
+            this.focus(window, cx);
+        });
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -170,13 +202,14 @@ impl Render for TextElement {
             .min_w(px(820.0))
             .w_full()
             .child(
-                TextInput::new(&self.input_state)
+                Input::new(&self.input_state)
                     .bordered(false)
                     .bg(transparent_white()),
             )
             .when(self._show_contextual_menu, |this| {
                 this.child(self.menu.clone())
             })
+        // .when(true, |this| this.child(self.menu.clone()))
     }
 }
 
@@ -188,7 +221,7 @@ pub struct TextElementData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
-    content: SharedString,
+    pub content: SharedString,
 }
 
 impl Default for Metadata {

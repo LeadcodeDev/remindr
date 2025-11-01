@@ -1,17 +1,15 @@
 use std::vec;
 
-use gpui::{AppContext, Context, IntoElement, ParentElement, Pixels, Render, Styled, Window, div};
+use gpui::*;
 use gpui_component::{
-    ActiveTheme, Collapsible, Icon, IconName, IndexPath, Side, Sizable, Size,
-    divider::Divider,
-    dropdown::{Dropdown, DropdownDelegate, DropdownState},
+    Collapsible, Icon, IconName,
     sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
 };
 
 pub struct MenuSidebar;
 
 impl Render for MenuSidebar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let links = vec![
             SidebarMenuItem::new("Chercher").icon(IconName::Search),
             SidebarMenuItem::new("Accueil").icon(Icon::default().path("icons/house.svg")),
@@ -26,24 +24,9 @@ impl Render for MenuSidebar {
             SidebarMenuItem::new("Document 3").icon(IconName::File),
         ];
 
-        let dropdown = cx.new(|cx: &mut Context<DropdownState<Vec<String>>>| {
-            DropdownState::new(
-                vec!["John Doe".into(), "Orange".into(), "Banana".into()],
-                Some(IndexPath::default()), // Select first item
-                window,
-                cx,
-            )
-        });
-
         Sidebar::left()
             .width(Pixels::from(240.0))
-            .header(
-                SidebarHeader::new().child(
-                    Dropdown::new(&dropdown)
-                        .appearance(false)
-                        .with_size(Size::Small),
-                ),
-            )
+            .header(SidebarHeader::new())
             .child(
                 SidebarGroup::new("Label")
                     .child(SidebarMenu::new().children(links))

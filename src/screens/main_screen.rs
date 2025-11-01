@@ -1,8 +1,6 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
-
 use gpui::{
-    AppContext, BorrowAppContext, Context, Entity, IntoElement, ParentElement, Pixels, Render,
-    Styled, Window, div,
+    AppContext, BorrowAppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
+    Window, div,
 };
 use gpui_component::ActiveTheme;
 
@@ -14,6 +12,7 @@ use crate::{
 };
 
 pub struct MainScreen {
+    sidebar: Entity<MenuSidebar>,
     document: Entity<Document>,
 }
 
@@ -25,7 +24,7 @@ impl MainScreen {
         let mut nodes = Vec::new();
         cx.new(|cx| {
             for (id, element) in parser.parse_nodes(&entries, window, cx) {
-                let drag_element = cx.new(|_| DragElement::new(id, element));
+                let drag_element = cx.new(|cx| DragElement::new(id, element, cx));
                 let element_node = ElementNode::with_id(id, drag_element);
 
                 nodes.push(element_node);
@@ -41,9 +40,10 @@ impl MainScreen {
             });
         });
 
+        let sidebar = cx.new(|_| MenuSidebar);
         let document = cx.new(|_| Document);
 
-        Self { document }
+        Self { sidebar, document }
     }
 }
 
@@ -53,7 +53,7 @@ impl Render for MainScreen {
             .w_full()
             .h_full()
             .flex()
-            .child(div().bg(cx.theme().accent).child(cx.new(|_| MenuSidebar)))
+            .child(div().bg(cx.theme().accent).child(self.sidebar.clone()))
             .child(self.document.clone())
     }
 }

@@ -1,15 +1,8 @@
-use gpui::{
-    AnyEntity, App, AppContext, BorrowAppContext, Context, DragMoveEvent, Entity,
-    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
-    Window, div, prelude::FluentBuilder, px,
-};
+use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{ActiveTheme, Icon, IconName, StyledExt};
 use uuid::Uuid;
 
-use crate::{
-    entities::ui::elements::{RemindrElement, text::text_element::TextElement},
-    states::document_state::ViewState,
-};
+use crate::{entities::ui::elements::RemindrElement, states::document_state::ViewState};
 
 #[derive(Clone, PartialEq)]
 pub enum MovingElement {
@@ -125,11 +118,13 @@ impl DragController {
 pub struct DragElement {
     pub id: Uuid,
     pub child: RemindrElement,
+    pub entity: Entity<RemindrElement>,
 }
 
 impl DragElement {
-    pub fn new(id: Uuid, child: RemindrElement) -> Self {
-        Self { id, child }
+    pub fn new(id: Uuid, child: RemindrElement, cx: &mut Context<Self>) -> Self {
+        let entity = cx.new(|_| child.clone());
+        Self { id, child, entity }
     }
 
     fn on_drop(&self, id: Uuid, direction: MovingElement, cx: &mut Context<Self>) {
@@ -161,11 +156,6 @@ impl Render for DragElement {
 
         let id = self.id;
         let child = self.child.clone();
-        // let element = cx.new(|_| match self.child.clone() {
-        //     RemindrElement::Text(element) => element,
-        // });
-
-        let entity_child = cx.new(|_| self.child.clone());
 
         div()
             .group("drag_element")
@@ -263,7 +253,7 @@ impl Render for DragElement {
                     .relative()
                     .ml_12()
                     .w_full()
-                    .child(entity_child)
+                    .child(self.entity.clone())
                     .tab_index(0)
                     .when_some(
                         match hovered_drop_zone {

@@ -17,7 +17,7 @@ impl ElementNodeParser for DividerElement {
 }
 
 impl Render for DividerElement {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().py_5().child(Divider::horizontal())
     }
 }

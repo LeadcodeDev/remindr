@@ -4,12 +4,9 @@ use gpui::{AppContext, Context, Window};
 use serde_json::{Value, from_str};
 use uuid::Uuid;
 
-use crate::{
-    controllers::drag_controller::DragElement,
-    entities::ui::elements::{
-        ElementNode, ElementNodeParser, RemindrElement, divider::divider_element::DividerElement,
-        text::text_element::TextElement,
-    },
+use crate::entities::ui::elements::{
+    ElementNodeParser, RemindrElement, divider::divider_element::DividerElement,
+    text::text_element::TextElement,
 };
 
 pub struct DocumentParser;

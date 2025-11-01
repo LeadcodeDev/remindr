@@ -1,5 +1,5 @@
 use anyhow::Error;
-use gpui::{AnyElement, App, AppContext, Context, Entity, IntoElement, Render, Window};
+use gpui::{AnyElement, Context, Entity, IntoElement, Render, Window};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -21,6 +21,7 @@ pub enum RemindrElement {
 }
 
 impl Render for RemindrElement {
+    #[allow(refining_impl_trait)]
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> AnyElement {
         match self {
             RemindrElement::Text(element) => element.clone().into_any_element(),

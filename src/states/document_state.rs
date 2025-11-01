@@ -1,5 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
 use gpui::Global;
 
 use crate::{controllers::drag_controller::DragController, entities::ui::elements::ElementNode};
