@@ -1,8 +1,8 @@
-use std::f64::INFINITY;
+use std::f32::INFINITY;
 
 use anyhow::{Error, Ok};
 use gpui::{prelude::FluentBuilder, *};
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Position};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
@@ -138,7 +138,14 @@ impl TextElement {
                         if let Some(node) = previous_element {
                             match node.element.read(cx).child.clone() {
                                 RemindrElement::Text(element) => {
-                                    element.update(cx, |this, cx| this.focus(window, cx));
+                                    element.update(cx, |this, cx| {
+                                        this.focus(window, cx);
+                                        this.set_cursor_position(
+                                            Position::new(INFINITY as u32, INFINITY as u32),
+                                            window,
+                                            cx,
+                                        );
+                                    });
                                 }
                                 _ => {}
                             }
@@ -192,6 +199,17 @@ impl TextElement {
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_state.update(cx, |element, cx| {
             element.focus(window, cx);
+        });
+    }
+
+    pub fn set_cursor_position(
+        &self,
+        position: Position,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_state.update(cx, |element, cx| {
+            element.set_cursor_position(position, window, cx);
         });
     }
 }
