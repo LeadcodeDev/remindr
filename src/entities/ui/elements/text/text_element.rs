@@ -21,8 +21,7 @@ use crate::{
 pub struct TextElement {
     pub data: TextElementData,
     input_state: Entity<InputState>,
-    _subscriptions: Vec<Subscription>,
-    _show_contextual_menu: bool,
+    show_contextual_menu: bool,
     menu: Entity<Menu>,
     is_focus: bool,
 }
@@ -31,14 +30,13 @@ impl ElementNodeParser for TextElement {
     fn parse(data: &Value, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
         let data = from_value::<TextElementData>(data.clone())?;
 
-        let (input_state, _subscriptions) = Self::init(data.metadata.content.clone(), window, cx);
+        let input_state = Self::init(data.metadata.content.clone(), window, cx);
         let menu = cx.new(|cx| Menu::new(window, cx));
 
         Ok(Self {
             data,
             input_state,
-            _subscriptions,
-            _show_contextual_menu: false,
+            show_contextual_menu: false,
             menu,
             is_focus: false,
         })
@@ -48,7 +46,7 @@ impl ElementNodeParser for TextElement {
 impl TextElement {
     pub fn new(id: Uuid, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
         let content = SharedString::new("");
-        let (input_state, _subscriptions) = Self::init(content.clone(), window, cx);
+        let input_state = Self::init(content.clone(), window, cx);
         let menu = cx.new(|cx| Menu::new(window, cx));
 
         Ok(Self {
@@ -57,8 +55,7 @@ impl TextElement {
                 metadata: Metadata { content },
             },
             input_state,
-            _subscriptions,
-            _show_contextual_menu: false,
+            show_contextual_menu: false,
             menu,
             is_focus: false,
         })
@@ -68,7 +65,7 @@ impl TextElement {
         content: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> (Entity<InputState>, Vec<Subscription>) {
+    ) -> Entity<InputState> {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(content)
@@ -76,16 +73,17 @@ impl TextElement {
                 .soft_wrap(true)
         });
 
-        let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
+        cx.subscribe_in(&input_state, window, {
             move |this, _, ev: &InputEvent, window, cx| match ev {
                 InputEvent::Focus => this.is_focus = true,
                 InputEvent::Change => this.on_change(window, cx),
                 InputEvent::PressEnter { .. } => this.on_press_enter(window, cx),
                 _ => {}
             }
-        })];
+        })
+        .detach();
 
-        (input_state, _subscriptions)
+        input_state
     }
 
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -107,7 +105,7 @@ impl TextElement {
             false
         };
 
-        self._show_contextual_menu = show_menu && self.is_focus;
+        self.show_contextual_menu = show_menu && self.is_focus;
 
         if show_menu {
             let search_query = input_state_str
@@ -123,38 +121,44 @@ impl TextElement {
         if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
             cx.update_global::<ViewState, _>(|view_state, cx| {
                 if let Some(current_doc_state) = view_state.current.as_mut() {
-                    let elements_rc_clone = &mut current_doc_state.elements;
-                    let index = {
-                        elements_rc_clone
-                            .iter()
-                            .position(|e| e.id == self.data.id)
-                            .unwrap_or_default()
-                    };
+                    let elements = &mut current_doc_state.elements;
+                    if !elements.is_empty() {
+                        let index = {
+                            elements
+                                .iter()
+                                .position(|e| e.id == self.data.id)
+                                .unwrap_or_default()
+                        };
 
-                    if elements_rc_clone.len() > 1 {
-                        elements_rc_clone.remove(index);
-
-                        let previous_element = elements_rc_clone.get(index.saturating_sub(1));
-                        if let Some(node) = previous_element {
-                            match node.element.read(cx).child.clone() {
-                                RemindrElement::Text(element) => {
-                                    element.update(cx, |this, cx| {
-                                        this.focus(window, cx);
-                                        this.set_cursor_position(
-                                            Position::new(INFINITY as u32, INFINITY as u32),
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
+                        self.on_remove_element_and_navigate_previous(index, elements, window, cx);
                     }
                 }
             });
         } else {
             self.data.metadata.content = input_state_value;
+        }
+    }
+
+    fn on_remove_element_and_navigate_previous(
+        &self,
+        index: usize,
+        elements: &mut Vec<ElementNode>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        elements.remove(index);
+
+        let previous_element = elements.get(index.saturating_sub(1));
+        if let Some(node) = previous_element {
+            match node.element.read(cx).child.clone() {
+                RemindrElement::Text(element) => {
+                    element.update(cx, |this, cx| {
+                        this.focus(window, cx);
+                        this.move_cursor_end(window, cx);
+                    });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -188,7 +192,7 @@ impl TextElement {
         });
 
         self.is_focus = false;
-        self._show_contextual_menu = false;
+        self.show_contextual_menu = false;
         self.menu.update(cx, |state, _| state.search = None);
 
         text_element.update(cx, |this, cx| {
@@ -202,14 +206,13 @@ impl TextElement {
         });
     }
 
-    pub fn set_cursor_position(
-        &self,
-        position: Position,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn move_cursor_end(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_state.update(cx, |element, cx| {
-            element.set_cursor_position(position, window, cx);
+            element.set_cursor_position(
+                Position::new(INFINITY as u32, INFINITY as u32),
+                window,
+                cx,
+            );
         });
     }
 }
@@ -224,10 +227,9 @@ impl Render for TextElement {
                     .bordered(false)
                     .bg(transparent_white()),
             )
-            .when(self._show_contextual_menu, |this| {
+            .when(self.show_contextual_menu, |this| {
                 this.child(self.menu.clone())
             })
-        // .when(true, |this| this.child(self.menu.clone()))
     }
 }
 
