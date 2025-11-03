@@ -207,7 +207,7 @@ impl Render for DragElement {
                         div()
                             .id("add_button")
                             .size_6()
-                            .hover(|this| this.bg(cx.theme().background.opacity(0.3)).cursor_grab())
+                            .hover(|this| this.bg(cx.theme().background.opacity(0.3)))
                             .flex()
                             .justify_center()
                             .items_center()
@@ -215,8 +215,7 @@ impl Render for DragElement {
                                 Icon::new(IconName::Plus)
                                     .size_5()
                                     .text_color(cx.theme().accent_foreground.opacity(0.5)),
-                            )
-                            .when(is_dragging, |this| this.cursor_move()),
+                            ),
                     )
                     .child(
                         div()

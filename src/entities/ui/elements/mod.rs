@@ -8,16 +8,19 @@ use crate::{
     controllers::drag_controller::DragElement,
     entities::ui::elements::{
         divider::divider_element::DividerElement, text::text_element::TextElement,
+        title::title_element::TitleElement,
     },
 };
 
 pub mod divider;
 pub mod text;
+pub mod title;
 
 #[derive(Clone, Debug)]
 pub enum RemindrElement {
     Text(Entity<TextElement>),
     Divider(Entity<DividerElement>),
+    Title(Entity<TitleElement>),
 }
 
 impl Render for RemindrElement {
@@ -26,6 +29,7 @@ impl Render for RemindrElement {
         match self {
             RemindrElement::Text(element) => element.clone().into_any_element(),
             RemindrElement::Divider(element) => element.clone().into_any_element(),
+            RemindrElement::Title(element) => element.clone().into_any_element(),
         }
     }
 }

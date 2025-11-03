@@ -1,5 +1,13 @@
 [
   {
+    "id": "019a08f1-6a3c-77e4-bfba-fc8a8458cc91",
+    "type": "title",
+    "metadata": {
+      "content": "Hello World",
+      "level": 1
+    }
+  },
+  {
     "id": "019a08f1-6a3c-77e4-bfba-fc8a8458cc92",
     "type": "text",
     "metadata": {
