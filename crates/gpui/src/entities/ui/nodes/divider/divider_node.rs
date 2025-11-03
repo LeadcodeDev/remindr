@@ -1,9 +1,7 @@
 use anyhow::{Error, Ok};
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window, div};
 use gpui_component::divider::Divider;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::entities::ui::nodes::ElementNodeParser;
 
@@ -20,9 +18,4 @@ impl Render for DividerNode {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().py_5().child(Divider::horizontal())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DividerNodeData {
-    pub id: Uuid,
 }

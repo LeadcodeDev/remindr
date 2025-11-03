@@ -3,7 +3,6 @@ use std::f32::INFINITY;
 use anyhow::{Error, Ok};
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::input::{InputEvent, InputState, Position, TextInput};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
 
@@ -12,7 +11,10 @@ use crate::{
     controllers::drag_controller::DragElement,
     entities::ui::{
         menu::Menu,
-        nodes::{ElementNode, ElementNodeParser, RemindrElement},
+        nodes::{
+            ElementNode, ElementNodeParser, RemindrElement,
+            heading::data::{HeadingNodeData, Metadata},
+        },
     },
     states::document_state::ViewState,
 };
@@ -234,26 +236,5 @@ impl Render for HeadingNode {
             .when(self.show_contextual_menu, |this| {
                 this.child(self.menu.clone())
             })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HeadingNodeData {
-    pub id: Uuid,
-    pub metadata: Metadata,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Metadata {
-    pub content: SharedString,
-    pub level: u32,
-}
-
-impl Default for Metadata {
-    fn default() -> Self {
-        Self {
-            content: SharedString::new(""),
-            level: 1,
-        }
     }
 }

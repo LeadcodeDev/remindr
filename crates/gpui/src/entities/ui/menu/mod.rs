@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, actions, div,
+    SharedString, StatefulInteractiveElement, Styled, Window, actions, div,
 };
 use gpui_component::ActiveTheme;
 
@@ -17,21 +17,19 @@ pub struct Menu {
     pub search: Option<SharedString>,
     elements: Vec<String>,
     _focus_handle: FocusHandle,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl Menu {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let _focus_handle = cx.focus_handle().tab_stop(true);
 
-        let _subscriptions =
-            vec![cx.on_focus(&_focus_handle, window, |_, _, cx| cx.emit(MenuEvent::Focus))];
+        cx.on_focus(&_focus_handle, window, |_, _, cx| cx.emit(MenuEvent::Focus))
+            .detach();
 
         Self {
             search: None,
             elements: vec!["Text".to_string(), "Codeblock".to_string()],
             _focus_handle,
-            _subscriptions,
         }
     }
 
