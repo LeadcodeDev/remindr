@@ -6,21 +6,21 @@ use uuid::Uuid;
 use crate::{
     Utils,
     controllers::drag_controller::DragElement,
-    entities::ui::elements::{
-        divider::divider_element::DividerElement, text::text_element::TextElement,
-        title::title_element::TitleElement,
+    entities::ui::nodes::{
+        divider::divider_node::DividerNode, heading::heading_node::HeadingNode,
+        text::text_node::TextNode,
     },
 };
 
 pub mod divider;
+pub mod heading;
 pub mod text;
-pub mod title;
 
 #[derive(Clone, Debug)]
 pub enum RemindrElement {
-    Text(Entity<TextElement>),
-    Divider(Entity<DividerElement>),
-    Title(Entity<TitleElement>),
+    Text(Entity<TextNode>),
+    Divider(Entity<DividerNode>),
+    Title(Entity<HeadingNode>),
 }
 
 impl Render for RemindrElement {

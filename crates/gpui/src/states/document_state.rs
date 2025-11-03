@@ -1,6 +1,6 @@
 use gpui::Global;
 
-use crate::{controllers::drag_controller::DragController, entities::ui::elements::ElementNode};
+use crate::{controllers::drag_controller::DragController, entities::ui::nodes::ElementNode};
 
 pub struct ViewState {
     pub current: Option<DocumentState>,

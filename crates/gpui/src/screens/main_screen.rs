@@ -6,7 +6,7 @@ use gpui_component::ActiveTheme;
 
 use crate::{
     controllers::drag_controller::{DragController, DragElement},
-    entities::{document_parser::DocumentParser, ui::elements::ElementNode},
+    entities::{document_parser::DocumentParser, ui::nodes::ElementNode},
     screens::parts::{document::Document, sidebar::MenuSidebar},
     states::document_state::{DocumentState, ViewState},
 };

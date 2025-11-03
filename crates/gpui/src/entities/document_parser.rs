@@ -4,9 +4,9 @@ use gpui::{AppContext, Context, Window};
 use serde_json::{Value, from_str};
 use uuid::Uuid;
 
-use crate::entities::ui::elements::{
-    ElementNodeParser, RemindrElement, divider::divider_element::DividerElement,
-    text::text_element::TextElement, title::title_element::TitleElement,
+use crate::entities::ui::nodes::{
+    ElementNodeParser, RemindrElement, divider::divider_node::DividerNode,
+    heading::heading_node::HeadingNode, text::text_node::TextNode,
 };
 
 pub struct DocumentParser;
@@ -44,15 +44,15 @@ impl DocumentParser {
 
         let element = match element_type {
             "text" => {
-                let element = cx.new(|cx| TextElement::parse(entry, window, cx).unwrap());
+                let element = cx.new(|cx| TextNode::parse(entry, window, cx).unwrap());
                 RemindrElement::Text(element)
             }
             "title" => {
-                let element = cx.new(|cx| TitleElement::parse(entry, window, cx).unwrap());
+                let element = cx.new(|cx| HeadingNode::parse(entry, window, cx).unwrap());
                 RemindrElement::Title(element)
             }
             "divider" => {
-                let element = cx.new(|cx| DividerElement::parse(entry, window, cx).unwrap());
+                let element = cx.new(|cx| DividerNode::parse(entry, window, cx).unwrap());
                 RemindrElement::Divider(element)
             }
             _ => panic!("Unknown element type"),

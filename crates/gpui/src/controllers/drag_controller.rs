@@ -2,7 +2,7 @@ use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{ActiveTheme, Icon, IconName, StyledExt};
 use uuid::Uuid;
 
-use crate::{entities::ui::elements::RemindrElement, states::document_state::ViewState};
+use crate::{entities::ui::nodes::RemindrElement, states::document_state::ViewState};
 
 #[derive(Clone, PartialEq)]
 pub enum MovingElement {

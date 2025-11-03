@@ -2,7 +2,7 @@ use std::f32::INFINITY;
 
 use anyhow::{Error, Ok};
 use gpui::{prelude::FluentBuilder, *};
-use gpui_component::input::{Input, InputEvent, InputState, Position};
+use gpui_component::input::{InputEvent, InputState, Position, TextInput};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
@@ -11,24 +11,24 @@ use crate::{
     Utils,
     controllers::drag_controller::DragElement,
     entities::ui::{
-        elements::{ElementNode, ElementNodeParser, RemindrElement},
         menu::Menu,
+        nodes::{ElementNode, ElementNodeParser, RemindrElement},
     },
     states::document_state::ViewState,
 };
 
 #[derive(Debug)]
-pub struct TitleElement {
-    pub data: TitleElementData,
+pub struct HeadingNode {
+    pub data: HeadingNodeData,
     input_state: Entity<InputState>,
     show_contextual_menu: bool,
     menu: Entity<Menu>,
     is_focus: bool,
 }
 
-impl ElementNodeParser for TitleElement {
+impl ElementNodeParser for HeadingNode {
     fn parse(data: &Value, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
-        let data = from_value::<TitleElementData>(data.clone())?;
+        let data = from_value::<HeadingNodeData>(data.clone())?;
 
         let input_state = Self::init(data.metadata.content.clone(), window, cx);
         let menu = cx.new(|cx| Menu::new(window, cx));
@@ -43,14 +43,14 @@ impl ElementNodeParser for TitleElement {
     }
 }
 
-impl TitleElement {
+impl HeadingNode {
     pub fn new(id: Uuid, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
         let content = SharedString::new("");
         let input_state = Self::init(content.clone(), window, cx);
         let menu = cx.new(|cx| Menu::new(window, cx));
 
         Ok(Self {
-            data: TitleElementData {
+            data: HeadingNodeData {
                 id,
                 metadata: Metadata {
                     content,
@@ -181,7 +181,7 @@ impl TitleElement {
             .map(|idx| idx + 1)
             .unwrap_or_default();
 
-        let text_element = cx.new(|cx| TitleElement::new(id, window, cx).unwrap());
+        let text_element = cx.new(|cx| HeadingNode::new(id, window, cx).unwrap());
         let element = RemindrElement::Title(text_element.clone());
         let drag_element = cx.new(|cx| DragElement::new(id, element, cx));
         let element_node = ElementNode::with_id(id, drag_element);
@@ -220,13 +220,13 @@ impl TitleElement {
     }
 }
 
-impl Render for TitleElement {
+impl Render for HeadingNode {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .min_w(px(820.0))
             .w_full()
             .child(
-                Input::new(&self.input_state)
+                TextInput::new(&self.input_state)
                     .bordered(false)
                     .text_3xl()
                     .bg(transparent_white()),
@@ -238,7 +238,7 @@ impl Render for TitleElement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TitleElementData {
+pub struct HeadingNodeData {
     pub id: Uuid,
     pub metadata: Metadata,
 }

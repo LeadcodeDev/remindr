@@ -1,7 +1,7 @@
 use gpui::{Context, DragMoveEvent, Window, div, prelude::*, px};
 use gpui_component::ActiveTheme;
 
-use crate::{entities::ui::elements::RemindrElement, states::document_state::ViewState};
+use crate::{entities::ui::nodes::RemindrElement, states::document_state::ViewState};
 
 pub struct Document;
 
