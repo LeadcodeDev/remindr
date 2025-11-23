@@ -154,9 +154,6 @@ impl Render for DragElement {
         let is_dragging = controller.is_dragging;
         let hovered_drop_zone = controller.hovered_drop_zone.clone();
 
-        let id = self.id;
-        let child = self.child.clone();
-
         div()
             .group("drag_element")
             .w_full()
@@ -216,43 +213,43 @@ impl Render for DragElement {
                                     .size_5()
                                     .text_color(cx.theme().accent_foreground.opacity(0.5)),
                             ),
-                    )
-                    .child(
-                        div()
-                            .id("drag_button")
-                            .size_6()
-                            .hover(|this| this.bg(cx.theme().background.opacity(0.3)).cursor_grab())
-                            .flex()
-                            .justify_center()
-                            .items_center()
-                            .child(
-                                Icon::default()
-                                    .path("icons/grip-vertical.svg")
-                                    .size_5()
-                                    .text_color(cx.theme().accent_foreground.opacity(0.5)),
-                            )
-                            .when(is_dragging, |this| this.cursor_move())
-                            .on_drag(
-                                child.clone(),
-                                move |element, _, _window: &mut Window, cx: &mut App| {
-                                    cx.update_global::<ViewState, _>(|state, _| {
-                                        let controller =
-                                            &mut state.current.as_mut().unwrap().drag_controller;
-
-                                        controller.dragging_id = Some(id);
-                                        controller.is_dragging = true;
-                                    });
-                                    cx.new(|_| element.clone())
-                                },
-                            ),
                     ),
+                // .child(
+                //     div()
+                //         .id("drag_button")
+                //         .size_6()
+                //         .hover(|this| this.bg(cx.theme().background.opacity(0.3)).cursor_grab())
+                //         .flex()
+                //         .justify_center()
+                //         .items_center()
+                //         .child(
+                //             Icon::default()
+                //                 .path("icons/grip-vertical.svg")
+                //                 .size_5()
+                //                 .text_color(cx.theme().accent_foreground.opacity(0.5)),
+                //         )
+                //         .when(is_dragging, |this| this.cursor_move())
+                //         .on_drag(
+                //             child.clone(),
+                //             move |element, _, _window: &mut Window, cx: &mut App| {
+                //                 cx.update_global::<ViewState, _>(|state, _| {
+                //                     let controller =
+                //                         &mut state.current.as_mut().unwrap().drag_controller;
+
+                //                     controller.dragging_id = Some(id);
+                //                     controller.is_dragging = true;
+                //                 });
+                //                 cx.new(|_| element.clone())
+                //             },
+                //         ),
+                // ),
             )
             .child(
                 div()
                     .relative()
                     .ml_12()
                     .w_full()
-                    .child(self.entity.clone())
+                    // .child(self.entity.clone())
                     .tab_index(0)
                     .when_some(
                         match hovered_drop_zone {

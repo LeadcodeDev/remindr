@@ -1,10 +1,14 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, fs::read_to_string};
 
 use anyhow::anyhow;
 use gpui::*;
 use gpui_component::Root;
-use remindr_gpui::{screens::main_screen::MainScreen, states::document_state::ViewState};
+use remindr_gpui::{
+    components::node_renderer::NodeRenderer, screens::main_screen::MainScreen,
+    states::document_state::ViewState,
+};
 use rust_embed::RustEmbed;
+use serde_json::from_str;
 
 #[derive(RustEmbed)]
 #[folder = "./assets"]
@@ -53,9 +57,17 @@ fn main() {
                 ..Default::default()
             };
 
+            let file_content =
+                read_to_string("artifacts/demo.json").expect("Failed to read demo.json");
+            let nodes = from_str(&file_content).expect("Failed to parse JSON from demo.json");
+
             let window = cx
+                // .open_window(options, |window, cx| {
+                //     let view = cx.new(|cx| MainScreen::new(window, cx));
+                //     cx.new(|cx| Root::new(view.into(), window, cx))
+                // })
                 .open_window(options, |window, cx| {
-                    let view = cx.new(|cx| MainScreen::new(window, cx));
+                    let view = cx.new(|cx| NodeRenderer::new(nodes, window, cx));
                     cx.new(|cx| Root::new(view.into(), window, cx))
                 })
                 .expect("failed to open window");
