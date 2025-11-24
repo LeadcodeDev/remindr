@@ -40,10 +40,11 @@ impl Draggable {
 
     fn on_drag_move(
         this: &mut Self,
-        event: &DragMoveEvent<RemindrNode>,
+        event: &DragMoveEvent<RemindrElement>,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        println!("2");
         this.state.update(cx, |state, _| {
             let bounds = event.bounds;
             let middle_y = bounds.origin.y + bounds.size.height / 2.0;
@@ -130,10 +131,8 @@ impl Render for Draggable {
                             .when(state.dragging_id.is_some(), |this| this.cursor_move())
                             .on_drag(
                                 drag_child,
-                                move |element: &RemindrElement,
-                                      _point: Point<Pixels>,
-                                      _window: &mut Window,
-                                      cx: &mut App| {
+                                move |element, _, _: &mut Window, cx: &mut App| {
+                                    println!("3");
                                     state_entity_for_closure.update(cx, |state, _| {
                                         state.dragging_id = Some(id_for_closure.clone());
                                         state.is_dragging = true;

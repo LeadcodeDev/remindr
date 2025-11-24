@@ -3,7 +3,8 @@ use gpui_component::ActiveTheme;
 use serde_json::Value;
 
 use crate::{
-    components::draggable::Draggable, entities::ui::nodes::node::RemindrNode,
+    components::draggable::Draggable,
+    entities::ui::nodes::{RemindrElement, node::RemindrNode},
     states::node_state::NodeState,
 };
 
@@ -26,10 +27,11 @@ impl NodeRenderer {
 
     fn on_drag_move(
         this: &mut Self,
-        event: &DragMoveEvent<RemindrNode>,
+        event: &DragMoveEvent<RemindrElement>,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        println!("1");
         this.state.update(cx, |state, cx| {
             if state.on_outside(event) {
                 cx.notify();
