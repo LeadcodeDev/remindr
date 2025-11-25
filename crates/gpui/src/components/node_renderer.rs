@@ -3,7 +3,7 @@ use gpui_component::{ActiveTheme, Icon, IconName};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{controllers::drag_controller::MovingElement, states::node_state::NodeState};
+use crate::states::node_state::{MovingElement, NodeState};
 
 pub struct NodeRenderer {
     state: Entity<NodeState>,

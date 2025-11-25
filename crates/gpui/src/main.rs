@@ -3,9 +3,12 @@ use std::{borrow::Cow, fs::read_to_string};
 use anyhow::anyhow;
 use gpui::*;
 use gpui_component::Root;
-use remindr_gpui::{components::node_renderer::NodeRenderer, states::document_state::ViewState};
+use remindr_gpui::{
+    components::node_renderer::NodeRenderer, screens::AppRouter,
+    states::document_state::DocumentState,
+};
 use rust_embed::RustEmbed;
-use serde_json::from_str;
+use serde_json::{Value, from_str};
 
 #[derive(RustEmbed)]
 #[folder = "./assets"]
@@ -31,8 +34,12 @@ fn main() {
 
     app.run(move |cx| {
         gpui_component::init(cx);
+        gpui_router::init(cx);
 
-        cx.set_global::<ViewState>(ViewState::default());
+        cx.set_global(DocumentState {
+            documents: Vec::new(),
+        });
+
         cx.activate(true);
 
         let mut window_size = size(px(640.), px(480.));
@@ -54,19 +61,15 @@ fn main() {
                 ..Default::default()
             };
 
-            let file_content =
-                read_to_string("artifacts/demo.json").expect("Failed to read demo.json");
-            let nodes = from_str(&file_content).expect("Failed to parse JSON from demo.json");
-
             let window = cx
+                .open_window(options, |window, cx| {
+                    let view = cx.new(|cx| AppRouter::new(window, cx));
+                    cx.new(|cx| Root::new(view, window, cx))
+                })
                 // .open_window(options, |window, cx| {
-                //     let view = cx.new(|cx| MainScreen::new(window, cx));
+                //     let view = cx.new(|cx| NodeRenderer::new(nodes, window, cx));
                 //     cx.new(|cx| Root::new(view.into(), window, cx))
                 // })
-                .open_window(options, |window, cx| {
-                    let view = cx.new(|cx| NodeRenderer::new(nodes, window, cx));
-                    cx.new(|cx| Root::new(view.into(), window, cx))
-                })
                 .expect("failed to open window");
 
             window

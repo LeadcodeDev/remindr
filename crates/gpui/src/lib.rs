@@ -2,7 +2,6 @@ use chrono::Utc;
 use uuid::{NoContext, Timestamp, Uuid};
 
 pub mod components;
-pub mod controllers;
 pub mod entities;
 pub mod screens;
 pub mod states;

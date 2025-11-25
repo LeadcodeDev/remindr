@@ -2,16 +2,19 @@ use gpui::{App, AppContext, DragMoveEvent, Window};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
 
-use crate::{
-    controllers::drag_controller::MovingElement,
-    entities::ui::nodes::{
-        ElementNodeParser, RemindrElement,
-        divider::divider_node::DividerNode,
-        heading::heading_node::HeadingNode,
-        node::{PartialRemindrNode, RemindrNode, RemindrNodeType},
-        text::text_node::TextNode,
-    },
+use crate::entities::ui::nodes::{
+    RemindrElement,
+    divider::divider_node::DividerNode,
+    heading::heading_node::HeadingNode,
+    node::{PartialRemindrNode, RemindrNode, RemindrNodeType},
+    text::text_node::TextNode,
 };
+
+#[derive(Clone, PartialEq)]
+pub enum MovingElement {
+    Before,
+    After,
+}
 
 pub struct NodeState {
     elements: Vec<RemindrNode>,

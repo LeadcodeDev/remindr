@@ -1,16 +1,8 @@
-use anyhow::Error;
-use gpui::{AnyElement, App, Context, Entity, IntoElement, Render, RenderOnce, Window};
-use serde_json::Value;
-use uuid::Uuid;
-
-use crate::{
-    Utils,
-    controllers::drag_controller::DragElement,
-    entities::ui::nodes::{
-        divider::divider_node::DividerNode, heading::heading_node::HeadingNode,
-        text::text_node::TextNode,
-    },
+use crate::entities::ui::nodes::{
+    divider::divider_node::DividerNode, heading::heading_node::HeadingNode,
+    text::text_node::TextNode,
 };
+use gpui::{AnyElement, App, Context, Entity, IntoElement, Render, RenderOnce, Window};
 
 pub mod divider;
 pub mod heading;
@@ -44,28 +36,4 @@ impl Render for RemindrElement {
             RemindrElement::Title(element) => element.clone().into_any_element(),
         }
     }
-}
-
-pub struct ElementNode {
-    pub id: Uuid,
-    pub element: Entity<DragElement>,
-}
-
-impl ElementNode {
-    pub fn new(element: Entity<DragElement>) -> Self {
-        Self {
-            id: Utils::generate_uuid(),
-            element,
-        }
-    }
-
-    pub fn with_id(id: Uuid, element: Entity<DragElement>) -> Self {
-        Self { id, element }
-    }
-}
-
-pub trait ElementNodeParser {
-    fn parse(payload: &Value, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error>
-    where
-        Self: Sized;
 }
