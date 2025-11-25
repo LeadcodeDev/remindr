@@ -3,10 +3,9 @@ use serde_json::{Value, from_value};
 use uuid::Uuid;
 
 use crate::{
-    Utils,
     controllers::drag_controller::MovingElement,
     entities::ui::nodes::{
-        ElementNode, ElementNodeParser, RemindrElement,
+        ElementNodeParser, RemindrElement,
         divider::divider_node::DividerNode,
         heading::heading_node::HeadingNode,
         node::{PartialRemindrNode, RemindrNode, RemindrNodeType},

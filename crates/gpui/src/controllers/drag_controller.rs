@@ -2,7 +2,7 @@ use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{ActiveTheme, Icon, IconName, StyledExt};
 use uuid::Uuid;
 
-use crate::{entities::ui::nodes::RemindrElement, states::document_state::ViewState};
+use crate::{Utils, entities::ui::nodes::RemindrElement, states::document_state::ViewState};
 
 #[derive(Clone, PartialEq)]
 pub enum MovingElement {
@@ -213,43 +213,43 @@ impl Render for DragElement {
                                     .size_5()
                                     .text_color(cx.theme().accent_foreground.opacity(0.5)),
                             ),
-                    ),
-                // .child(
-                //     div()
-                //         .id("drag_button")
-                //         .size_6()
-                //         .hover(|this| this.bg(cx.theme().background.opacity(0.3)).cursor_grab())
-                //         .flex()
-                //         .justify_center()
-                //         .items_center()
-                //         .child(
-                //             Icon::default()
-                //                 .path("icons/grip-vertical.svg")
-                //                 .size_5()
-                //                 .text_color(cx.theme().accent_foreground.opacity(0.5)),
-                //         )
-                //         .when(is_dragging, |this| this.cursor_move())
-                //         .on_drag(
-                //             child.clone(),
-                //             move |element, _, _window: &mut Window, cx: &mut App| {
-                //                 cx.update_global::<ViewState, _>(|state, _| {
-                //                     let controller =
-                //                         &mut state.current.as_mut().unwrap().drag_controller;
+                    )
+                    .child(
+                        div()
+                            .id("drag_button")
+                            .size_6()
+                            .hover(|this| this.bg(cx.theme().background.opacity(0.3)).cursor_grab())
+                            .flex()
+                            .justify_center()
+                            .items_center()
+                            .child(
+                                Icon::default()
+                                    .path("icons/grip-vertical.svg")
+                                    .size_5()
+                                    .text_color(cx.theme().accent_foreground.opacity(0.5)),
+                            )
+                            .when(is_dragging, |this| this.cursor_move())
+                            .on_drag(
+                                self.child.clone(),
+                                move |element, _, _window: &mut Window, cx: &mut App| {
+                                    cx.update_global::<ViewState, _>(|state, _| {
+                                        let controller =
+                                            &mut state.current.as_mut().unwrap().drag_controller;
 
-                //                     controller.dragging_id = Some(id);
-                //                     controller.is_dragging = true;
-                //                 });
-                //                 cx.new(|_| element.clone())
-                //             },
-                //         ),
-                // ),
+                                        controller.dragging_id = Some(Utils::generate_uuid());
+                                        controller.is_dragging = true;
+                                    });
+                                    cx.new(|_| element.clone())
+                                },
+                            ),
+                    ),
             )
             .child(
                 div()
                     .relative()
                     .ml_12()
                     .w_full()
-                    // .child(self.entity.clone())
+                    .child(self.entity.clone())
                     .tab_index(0)
                     .when_some(
                         match hovered_drop_zone {

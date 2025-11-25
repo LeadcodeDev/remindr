@@ -3,10 +3,7 @@ use std::{borrow::Cow, fs::read_to_string};
 use anyhow::anyhow;
 use gpui::*;
 use gpui_component::Root;
-use remindr_gpui::{
-    components::node_renderer::NodeRenderer, screens::main_screen::MainScreen,
-    states::document_state::ViewState,
-};
+use remindr_gpui::{components::node_renderer::NodeRenderer, states::document_state::ViewState};
 use rust_embed::RustEmbed;
 use serde_json::from_str;
 

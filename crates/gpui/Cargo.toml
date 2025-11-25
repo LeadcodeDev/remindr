@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 anyhow = "1.0.100"
 chrono = "0.4.42"
-gpui = "0.2.1"
+gpui = "0.2.2"
 gpui-component = { version = "0.3.1", features = ["webview"] }
 gpui-router = "0.2.6"
 rust-embed = "8.7.2"
