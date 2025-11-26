@@ -1,14 +1,10 @@
-use std::{borrow::Cow, fs::read_to_string};
+use std::borrow::Cow;
 
 use anyhow::anyhow;
 use gpui::*;
 use gpui_component::Root;
-use remindr_gpui::{
-    components::node_renderer::NodeRenderer, screens::AppRouter,
-    states::document_state::DocumentState,
-};
+use remindr_gpui::{screens::AppRouter, states::document_state::DocumentState};
 use rust_embed::RustEmbed;
-use serde_json::{Value, from_str};
 
 #[derive(RustEmbed)]
 #[folder = "./assets"]
@@ -66,10 +62,6 @@ fn main() {
                     let view = cx.new(|cx| AppRouter::new(window, cx));
                     cx.new(|cx| Root::new(view, window, cx))
                 })
-                // .open_window(options, |window, cx| {
-                //     let view = cx.new(|cx| NodeRenderer::new(nodes, window, cx));
-                //     cx.new(|cx| Root::new(view.into(), window, cx))
-                // })
                 .expect("failed to open window");
 
             window

@@ -2,7 +2,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_router::{IntoLayout, Outlet, use_location};
 
-use crate::screens::parts::sidebar::AppSidebar;
+use crate::components::sidebar::AppSidebar;
 
 #[derive(IntoElement, IntoLayout)]
 pub struct Layout {

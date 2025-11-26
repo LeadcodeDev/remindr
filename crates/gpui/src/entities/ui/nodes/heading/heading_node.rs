@@ -4,20 +4,17 @@ use anyhow::{Error, Ok};
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::input::{Input, InputEvent, InputState, Position};
 use serde_json::{Value, from_value, to_value};
-use uuid::Uuid;
 
 use crate::{
     Utils,
-    entities::ui::{
-        menu::Menu,
-        nodes::{
-            RemindrElement,
-            heading::data::{HeadingNodeData, Metadata},
-            node::RemindrNode,
-            text::{
-                data::{Metadata as TextMetadata, TextNodeData},
-                text_node::TextNode,
-            },
+    components::slash_menu::SlashMenu,
+    entities::ui::nodes::{
+        RemindrElement,
+        heading::data::HeadingNodeData,
+        node::RemindrNode,
+        text::{
+            data::{Metadata as TextMetadata, TextNodeData},
+            text_node::TextNode,
         },
     },
     states::node_state::NodeState,
@@ -28,7 +25,7 @@ pub struct HeadingNode {
     pub data: HeadingNodeData,
     input_state: Entity<InputState>,
     show_contextual_menu: bool,
-    menu: Entity<Menu>,
+    menu: Entity<SlashMenu>,
     is_focus: bool,
 }
 
@@ -37,32 +34,11 @@ impl HeadingNode {
         let data = from_value::<HeadingNodeData>(data.clone())?;
 
         let input_state = Self::init(data.metadata.content.clone(), window, cx);
-        let menu = cx.new(|cx| Menu::new(window, cx));
+        let menu = cx.new(|cx| SlashMenu::new(window, cx));
 
         Ok(Self {
             state: None,
             data,
-            input_state,
-            show_contextual_menu: false,
-            menu,
-            is_focus: false,
-        })
-    }
-
-    pub fn new(id: Uuid, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
-        let content = SharedString::new("");
-        let input_state = Self::init(content.clone(), window, cx);
-        let menu = cx.new(|cx| Menu::new(window, cx));
-
-        Ok(Self {
-            state: None,
-            data: HeadingNodeData {
-                id,
-                metadata: Metadata {
-                    content,
-                    ..Default::default()
-                },
-            },
             input_state,
             show_contextual_menu: false,
             menu,

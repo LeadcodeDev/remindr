@@ -7,13 +7,11 @@ use serde_json::{Value, from_value, to_value};
 
 use crate::{
     Utils,
-    entities::ui::{
-        menu::Menu,
-        nodes::{
-            RemindrElement,
-            node::RemindrNode,
-            text::data::{Metadata, TextNodeData},
-        },
+    components::slash_menu::SlashMenu,
+    entities::ui::nodes::{
+        RemindrElement,
+        node::RemindrNode,
+        text::data::{Metadata, TextNodeData},
     },
     states::node_state::NodeState,
 };
@@ -23,7 +21,7 @@ pub struct TextNode {
     pub data: TextNodeData,
     input_state: Entity<InputState>,
     show_contextual_menu: bool,
-    menu: Entity<Menu>,
+    menu: Entity<SlashMenu>,
     is_focus: bool,
 }
 
@@ -47,7 +45,7 @@ impl TextNode {
             }
         })
         .detach();
-        let menu = cx.new(|cx| Menu::new(window, cx));
+        let menu = cx.new(|cx| SlashMenu::new(window, cx));
 
         Ok(Self {
             state: None,

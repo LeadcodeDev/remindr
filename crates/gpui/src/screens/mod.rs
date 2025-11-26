@@ -11,7 +11,6 @@ use crate::{
 pub mod document_screen;
 pub mod home_screen;
 pub mod login_screen;
-pub mod parts;
 
 pub struct AppRouter {
     login_screen: Entity<LoginScreen>,
@@ -20,7 +19,7 @@ pub struct AppRouter {
 }
 
 impl AppRouter {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         let login_screen = cx.new(|cx| LoginScreen::new(cx));
         let home_screen = cx.new(|cx| HomeScreen::new(cx));
         let document_screen = cx.new(|cx| DocumentScreen::new(cx));

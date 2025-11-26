@@ -3,7 +3,7 @@ use gpui::*;
 pub struct HomeScreen {}
 
 impl HomeScreen {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(_: &mut Context<Self>) -> Self {
         Self {}
     }
 }
