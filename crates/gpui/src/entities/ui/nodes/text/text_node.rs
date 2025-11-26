@@ -3,8 +3,7 @@ use std::f32::INFINITY;
 use anyhow::{Error, Ok};
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::input::{Input, InputEvent, InputState, Position};
-use serde_json::{Value, from_value};
-use uuid::Uuid;
+use serde_json::{Value, from_value, to_value};
 
 use crate::{
     Utils,
@@ -16,10 +15,11 @@ use crate::{
             text::data::{Metadata, TextNodeData},
         },
     },
+    states::node_state::NodeState,
 };
 
-#[derive(Debug)]
 pub struct TextNode {
+    pub state: Option<Entity<NodeState>>,
     pub data: TextNodeData,
     input_state: Entity<InputState>,
     show_contextual_menu: bool,
@@ -31,43 +31,9 @@ impl TextNode {
     pub fn parse(data: &Value, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
         let data = from_value::<TextNodeData>(data.clone())?;
 
-        let input_state = Self::init(data.metadata.content.clone(), window, cx);
-        let menu = cx.new(|cx| Menu::new(window, cx));
-
-        Ok(Self {
-            data,
-            input_state,
-            show_contextual_menu: false,
-            menu,
-            is_focus: false,
-        })
-    }
-
-    pub fn new(id: Uuid, window: &mut Window, cx: &mut Context<Self>) -> Result<Self, Error> {
-        let content = SharedString::new("");
-        let input_state = Self::init(content.clone(), window, cx);
-        let menu = cx.new(|cx| Menu::new(window, cx));
-
-        Ok(Self {
-            data: TextNodeData {
-                id,
-                metadata: Metadata { content },
-            },
-            input_state,
-            show_contextual_menu: false,
-            menu,
-            is_focus: false,
-        })
-    }
-
-    fn init(
-        content: SharedString,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .default_value(content)
+                .default_value(data.metadata.content.clone())
                 .auto_grow(1, INFINITY as usize)
                 .soft_wrap(true)
         });
@@ -81,8 +47,16 @@ impl TextNode {
             }
         })
         .detach();
+        let menu = cx.new(|cx| Menu::new(window, cx));
 
-        input_state
+        Ok(Self {
+            state: None,
+            data,
+            input_state,
+            show_contextual_menu: false,
+            menu,
+            is_focus: false,
+        })
     }
 
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -118,85 +92,69 @@ impl TextNode {
         }
 
         if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
-            // cx.update_global::<ViewState, _>(|view_state, cx| {
-            //     if let Some(current_doc_state) = view_state.current.as_mut() {
-            //         let elements = &mut current_doc_state.elements;
-            //         if !elements.is_empty() {
-            //             let index = {
-            //                 elements
-            //                     .iter()
-            //                     .position(|e| e.id == self.data.id)
-            //                     .unwrap_or_default()
-            //             };
+            if let Some(state) = self.state.clone() {
+                state.update(cx, |state, cx| {
+                    if !state.get_nodes().is_empty() {
+                        let previous_element = state.get_previous_node(self.data.id);
+                        state.remove_node(self.data.id);
 
-            //             self.on_remove_element_and_navigate_previous(index, elements, window, cx);
-            //         }
-            //     }
-            // });
+                        if let Some(previous_element) = previous_element {
+                            if let RemindrElement::Text(element) = previous_element.element.clone()
+                            {
+                                element.update(cx, |this, cx| {
+                                    this.focus(window, cx);
+                                    this.move_cursor_end(window, cx);
+                                });
+                            }
+
+                            if let RemindrElement::Title(element) = previous_element.element.clone()
+                            {
+                                element.update(cx, |this, cx| {
+                                    this.focus(window, cx);
+                                    this.move_cursor_end(window, cx);
+                                });
+                            }
+                        }
+                    }
+                });
+            }
         } else {
             self.data.metadata.content = input_state_value;
         }
     }
 
-    fn on_remove_element_and_navigate_previous(
-        &self,
-        index: usize,
-        elements: &mut Vec<RemindrNode>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // elements.remove(index);
-
-        // let previous_element = elements.get(index.saturating_sub(1));
-        // if let Some(node) = previous_element {
-        //     match node.element.read(cx).child.clone() {
-        //         RemindrElement::Text(element) => {
-        //             element.update(cx, |this, cx| {
-        //                 this.focus(window, cx);
-        //                 this.move_cursor_end(window, cx);
-        //             });
-        //         }
-        //         _ => {}
-        //     }
-        // }
-    }
-
     fn on_press_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // self.input_state.update(cx, |state, cx| {
-        //     let value = state.value();
-        //     state.set_value(value.trim().to_string(), window, cx);
-        // });
+        self.input_state.update(cx, |state, cx| {
+            let value = state.value();
+            state.set_value(value.trim().to_string(), window, cx);
+        });
 
-        // let id = Utils::generate_uuid();
-        // let state = cx.global::<ViewState>().current.as_ref().unwrap();
+        if let Some(state) = self.state.clone() {
+            self.is_focus = false;
+            self.show_contextual_menu = false;
+            self.menu.update(cx, |state, _| state.search = None);
 
-        // let insertion_index = state
-        //     .elements
-        //     .iter()
-        //     .position(|e| e.id == self.data.id)
-        //     .map(|idx| idx + 1)
-        //     .unwrap_or_default();
+            state.update(cx, |state, cx| {
+                let id = Utils::generate_uuid();
+                let data = to_value(TextNodeData {
+                    id,
+                    metadata: Metadata::default(),
+                })
+                .unwrap();
 
-        // let text_element = cx.new(|cx| TextNode::new(id, window, cx).unwrap());
-        // let element = RemindrElement::Text(text_element.clone());
-        // let drag_element = cx.new(|cx| DragElement::new(id, element, cx));
-        // let element_node = ElementNode::with_id(id, drag_element);
+                let element = cx.new(|cx| TextNode::parse(&data, window, cx).unwrap());
+                element.update(cx, |this, cx| {
+                    this.focus(window, cx);
+                });
 
-        // cx.update_global::<ViewState, _>(|this, _| {
-        //     this.current
-        //         .as_mut()
-        //         .unwrap()
-        //         .elements
-        //         .insert(insertion_index, element_node);
-        // });
+                let node = RemindrNode {
+                    id,
+                    element: RemindrElement::Text(element),
+                };
 
-        // self.is_focus = false;
-        // self.show_contextual_menu = false;
-        // self.menu.update(cx, |state, _| state.search = None);
-
-        // text_element.update(cx, |this, cx| {
-        //     this.focus(window, cx);
-        // });
+                state.insert_node_after(self.data.id, &node);
+            });
+        }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {

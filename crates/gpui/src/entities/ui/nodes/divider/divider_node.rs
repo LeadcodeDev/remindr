@@ -1,14 +1,17 @@
 use anyhow::{Error, Ok};
-use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window, div};
+use gpui::{Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div};
 use gpui_component::divider::Divider;
 use serde_json::Value;
 
-#[derive(Debug)]
-pub struct DividerNode;
+use crate::states::node_state::NodeState;
+
+pub struct DividerNode {
+    pub state: Option<Entity<NodeState>>,
+}
 
 impl DividerNode {
     pub fn parse(_: &Value, _: &mut Window, _: &mut Context<Self>) -> Result<Self, Error> {
-        Ok(Self)
+        Ok(Self { state: None })
     }
 }
 

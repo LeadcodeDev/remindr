@@ -1,4 +1,4 @@
-use gpui::{App, AppContext, DragMoveEvent, Window};
+use gpui::{App, AppContext, DragMoveEvent, Entity, Window};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
 
@@ -16,6 +16,7 @@ pub enum MovingElement {
     After,
 }
 
+#[derive(Clone)]
 pub struct NodeState {
     elements: Vec<RemindrNode>,
     pub hovered_drop_zone: Option<(Uuid, MovingElement)>,
@@ -26,6 +27,23 @@ pub struct NodeState {
 impl NodeState {
     pub fn get_nodes(&self) -> &Vec<RemindrNode> {
         &self.elements
+    }
+
+    pub fn register_state(&self, state: Entity<Self>, cx: &mut App) {
+        self.elements
+            .clone()
+            .iter_mut()
+            .for_each(|node| match &node.element {
+                RemindrElement::Divider(divider) => {
+                    divider.update(cx, |this, _| this.state = Some(state.clone()))
+                }
+                RemindrElement::Title(heading) => {
+                    heading.update(cx, |this, _| this.state = Some(state.clone()))
+                }
+                RemindrElement::Text(text) => {
+                    text.update(cx, |this, _| this.state = Some(state.clone()))
+                }
+            });
     }
 
     pub fn start_drag(&mut self, id: Uuid) {
@@ -138,6 +156,20 @@ impl NodeState {
 
     pub fn push_node(&mut self, node: &RemindrNode) {
         self.elements.push(node.clone());
+    }
+
+    pub fn remove_node(&mut self, id: Uuid) {
+        self.elements.retain(|node| node.id != id);
+    }
+
+    pub fn insert_node_after(&mut self, id: Uuid, node: &RemindrNode) {
+        let index = self.elements.iter().position(|node| node.id == id).unwrap();
+        self.elements.insert(index + 1, node.clone());
+    }
+
+    pub fn get_previous_node(&self, id: Uuid) -> Option<RemindrNode> {
+        let index = self.elements.iter().position(|node| node.id == id).unwrap();
+        self.elements.get(index - 1).cloned()
     }
 }
 

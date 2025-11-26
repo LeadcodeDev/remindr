@@ -76,6 +76,11 @@ impl NodeRenderer {
 
 impl Render for NodeRenderer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        {
+            self.state
+                .update(cx, |state, cx| state.register_state(self.state.clone(), cx));
+        }
+
         let state = self.state.read(cx);
         let nodes = state.get_nodes().clone();
 
