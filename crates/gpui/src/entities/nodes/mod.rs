@@ -1,4 +1,4 @@
-use crate::entities::ui::nodes::{
+use crate::entities::nodes::{
     divider::divider_node::DividerNode, heading::heading_node::HeadingNode,
     text::text_node::TextNode,
 };

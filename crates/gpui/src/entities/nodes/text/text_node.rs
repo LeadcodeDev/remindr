@@ -8,7 +8,7 @@ use serde_json::{Value, from_value, to_value};
 use crate::{
     Utils,
     components::slash_menu::SlashMenu,
-    entities::ui::nodes::{
+    entities::nodes::{
         RemindrElement,
         node::RemindrNode,
         text::data::{Metadata, TextNodeData},
