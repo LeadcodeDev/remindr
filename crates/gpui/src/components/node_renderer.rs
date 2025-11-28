@@ -14,15 +14,16 @@ pub struct DraggableInfo {
 }
 
 impl NodeRenderer {
-    pub fn new(nodes: Vec<Value>, window: &mut Window, app: &mut App) -> Self {
-        let mut state = NodeState::default();
+    pub fn new(nodes: Vec<Value>, window: &mut Window, cx: &mut App) -> Self {
+        let state = cx.new(|_| NodeState::default());
 
-        for value in nodes.into_iter() {
-            let node = state.parse_node(&value, window, app);
-            state.push_node(&node);
-        }
+        state.update(cx, |this, cx| {
+            for value in nodes.into_iter() {
+                let node = this.parse_node(&value, &state, window, cx);
+                this.push_node(&node);
+            }
+        });
 
-        let state = app.new(|_| state);
         Self { state }
     }
 
@@ -76,11 +77,6 @@ impl NodeRenderer {
 
 impl Render for NodeRenderer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        {
-            self.state
-                .update(cx, |state, cx| state.register_state(self.state.clone(), cx));
-        }
-
         let state = self.state.read(cx);
         let nodes = state.get_nodes().clone();
 
