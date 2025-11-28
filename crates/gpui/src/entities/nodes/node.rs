@@ -9,6 +9,12 @@ pub struct RemindrNode {
     pub element: RemindrElement,
 }
 
+impl RemindrNode {
+    pub fn new(id: Uuid, element: RemindrElement) -> Self {
+        Self { id, element }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PartialRemindrNode {
     pub id: Uuid,

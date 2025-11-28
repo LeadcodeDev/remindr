@@ -19,7 +19,7 @@ use crate::{
 pub struct TextNode {
     pub state: Entity<NodeState>,
     pub data: TextNodeData,
-    input_state: Entity<InputState>,
+    pub input_state: Entity<InputState>,
     show_contextual_menu: bool,
     menu: Entity<SlashMenu>,
     is_focus: bool,
@@ -105,7 +105,7 @@ impl TextNode {
                             });
                         }
 
-                        if let RemindrElement::Title(element) = previous_element.element.clone() {
+                        if let RemindrElement::Heading(element) = previous_element.element.clone() {
                             element.update(cx, |this, cx| {
                                 this.focus(window, cx);
                                 this.move_cursor_end(window, cx);
@@ -131,21 +131,14 @@ impl TextNode {
 
         self.state.update(cx, |state, cx| {
             let id = Utils::generate_uuid();
-            let data = to_value(TextNodeData {
-                id,
-                metadata: Metadata::default(),
-            })
-            .unwrap();
+            let data = to_value(TextNodeData::new(id, Metadata::default())).unwrap();
 
             let element = cx.new(|cx| TextNode::parse(&data, &self.state, window, cx).unwrap());
             element.update(cx, |this, cx| {
                 this.focus(window, cx);
             });
 
-            let node = RemindrNode {
-                id,
-                element: RemindrElement::Text(element),
-            };
+            let node = RemindrNode::new(id, RemindrElement::Text(element));
 
             state.insert_node_after(self.data.id, &node);
         });

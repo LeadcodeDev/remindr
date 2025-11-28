@@ -8,6 +8,12 @@ pub struct HeadingNodeData {
     pub metadata: Metadata,
 }
 
+impl HeadingNodeData {
+    pub fn new(id: Uuid, metadata: Metadata) -> Self {
+        Self { id, metadata }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     pub content: SharedString,

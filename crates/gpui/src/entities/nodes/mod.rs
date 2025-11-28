@@ -13,7 +13,7 @@ pub mod text;
 pub enum RemindrElement {
     Text(Entity<TextNode>),
     Divider(Entity<DividerNode>),
-    Title(Entity<HeadingNode>),
+    Heading(Entity<HeadingNode>),
 }
 
 impl RenderOnce for RemindrElement {
@@ -22,7 +22,7 @@ impl RenderOnce for RemindrElement {
         match self {
             RemindrElement::Text(element) => element.clone().into_any_element(),
             RemindrElement::Divider(element) => element.clone().into_any_element(),
-            RemindrElement::Title(element) => element.clone().into_any_element(),
+            RemindrElement::Heading(element) => element.clone().into_any_element(),
         }
     }
 }
@@ -33,7 +33,7 @@ impl Render for RemindrElement {
         match self {
             RemindrElement::Text(element) => element.clone().into_any_element(),
             RemindrElement::Divider(element) => element.clone().into_any_element(),
-            RemindrElement::Title(element) => element.clone().into_any_element(),
+            RemindrElement::Heading(element) => element.clone().into_any_element(),
         }
     }
 }

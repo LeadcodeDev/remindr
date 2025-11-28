@@ -29,6 +29,10 @@ impl NodeState {
         &self.elements
     }
 
+    pub fn get_current_nodes(&self, id: Uuid) -> Option<&RemindrNode> {
+        self.elements.iter().find(|element| element.id == id)
+    }
+
     pub fn start_drag(&mut self, id: Uuid) {
         self.dragging_id = Some(id);
         self.is_dragging = true;
@@ -129,7 +133,7 @@ impl NodeState {
             }
             RemindrNodeType::Title => {
                 let element = app.new(|cx| HeadingNode::parse(value, state, window, cx).unwrap());
-                RemindrElement::Title(element)
+                RemindrElement::Heading(element)
             }
             RemindrNodeType::Divider => {
                 let element = app.new(|cx| DividerNode::parse(value, window, cx).unwrap());
