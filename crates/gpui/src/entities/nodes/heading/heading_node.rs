@@ -13,7 +13,7 @@ use crate::{
         heading::data::HeadingNodeData,
         node::RemindrNode,
         text::{
-            data::{Metadata as TextMetadata, TextNodeData},
+            data::{TextMetadata, TextNodeData},
             text_node::TextNode,
         },
     },

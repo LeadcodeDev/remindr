@@ -1,22 +1,21 @@
 use gpui::*;
-use gpui_component::{IconName, Selectable, Sizable, button::Button, h_flex, popover::Popover};
+use gpui_component::{
+    ActiveTheme, Icon, Selectable, StyledExt,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
+    label::Label,
+    popover::Popover,
+};
 use serde_json::to_value;
 use uuid::Uuid;
 
 use crate::{
     Utils,
     entities::nodes::{
-        RemindrElement,
+        NodePayload, RemindrElement,
         divider::{data::DividerNodeData, divider_node::DividerNode},
-        heading::{
-            data::{HeadingNodeData, Metadata as HeadingMetadata},
-            heading_node::HeadingNode,
-        },
+        heading::data::HeadingMetadata,
         node::RemindrNode,
-        text::{
-            data::{Metadata as TextMetadata, TextNodeData},
-            text_node::TextNode,
-        },
+        text::data::TextMetadata,
     },
     states::node_state::NodeState,
 };
@@ -47,19 +46,25 @@ impl SlashMenu {
     fn render_item(
         &self,
         label: &'static str,
-        icon: IconName,
-        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        icon: Icon,
+        on_click: impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
     ) -> Button {
+        let custom = ButtonCustomVariant::new(cx)
+            .hover(cx.theme().primary.opacity(0.1))
+            .active(cx.theme().secondary);
+
         Button::new(label)
-            .small()
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(SharedString::new(label)),
-            )
+            .custom(custom)
+            .justify_start()
+            .items_center()
+            .py_3()
+            .px_1()
+            .cursor_pointer()
+            .gap_2()
             .child(icon)
-            .on_click(on_click)
+            .child(SharedString::new(label))
+            .on_click(cx.listener(on_click))
     }
 
     fn remove_slash_command(&self, element: SharedString) -> SharedString {
@@ -103,17 +108,15 @@ impl SlashMenu {
     ) {
         Self::remove_slash(this, window, cx);
         this.state.update(cx, |state, cx| {
-            let id = Utils::generate_uuid();
-            let data = to_value(TextNodeData::new(id, TextMetadata::default())).unwrap();
-
-            let element = cx.new(|cx| TextNode::parse(&data, &this.state, window, cx).unwrap());
-            element.update(cx, |this, cx| {
-                this.focus(window, cx);
-            });
-
-            let node = RemindrNode::new(id, RemindrElement::Text(element));
-
-            state.insert_node_after(this.related_id, &node);
+            state.insert_node_after(
+                this.related_id,
+                &RemindrElement::create_node(
+                    NodePayload::Text((TextMetadata::default(), true)),
+                    &this.state,
+                    window,
+                    cx,
+                ),
+            );
         });
 
         this.open = false;
@@ -128,17 +131,15 @@ impl SlashMenu {
     ) {
         Self::remove_slash(this, window, cx);
         this.state.update(cx, |state, cx| {
-            let id = Utils::generate_uuid();
-            let data = to_value(HeadingNodeData::new(id, HeadingMetadata::default())).unwrap();
-
-            let element = cx.new(|cx| HeadingNode::parse(&data, &this.state, window, cx).unwrap());
-            element.update(cx, |this, cx| {
-                this.focus(window, cx);
-            });
-
-            let node = RemindrNode::new(id, RemindrElement::Heading(element));
-
-            state.insert_node_after(this.related_id, &node);
+            state.insert_node_after(
+                this.related_id,
+                &RemindrElement::create_node(
+                    NodePayload::Heading((HeadingMetadata::default(), true)),
+                    &this.state,
+                    window,
+                    cx,
+                ),
+            );
         });
 
         this.open = false;
@@ -185,23 +186,42 @@ impl Render for SlashMenu {
                     this.open = *open;
                     cx.notify();
                 }))
-                .child(div().flex().flex_col().flex_1().gap_1().children([
-                    self.render_item(
-                        "Paragraph",
-                        IconName::ChevronDown,
-                        cx.listener(Self::on_insert_paragraph),
-                    ),
-                    self.render_item(
-                        "Heading",
-                        IconName::ChevronDown,
-                        cx.listener(Self::on_insert_heading),
-                    ),
-                    self.render_item(
-                        "Divider",
-                        IconName::ChevronDown,
-                        cx.listener(Self::on_insert_divider),
-                    ),
-                ])),
+                .p_2()
+                .w(px(365.0))
+                .bg(cx.theme().secondary)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .gap_1()
+                        .child(
+                            Label::new("This is a label")
+                                .text_xs()
+                                .font_semibold()
+                                .opacity(0.5),
+                        )
+                        .children([
+                            self.render_item(
+                                "Paragraph",
+                                Icon::default().path("icons/pilcrow.svg"),
+                                Self::on_insert_paragraph,
+                                cx,
+                            ),
+                            self.render_item(
+                                "Heading",
+                                Icon::default().path("icons/heading.svg"),
+                                Self::on_insert_heading,
+                                cx,
+                            ),
+                            self.render_item(
+                                "Divider",
+                                Icon::default().path("icons/separator-horizontal.svg"),
+                                Self::on_insert_divider,
+                                cx,
+                            ),
+                        ]),
+                ),
         )
     }
 }

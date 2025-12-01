@@ -3,15 +3,13 @@ use std::f32::INFINITY;
 use anyhow::{Error, Ok};
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Position};
-use serde_json::{Value, from_value, to_value};
+use serde_json::{Value, from_value};
 
 use crate::{
-    Utils,
     components::slash_menu::SlashMenu,
     entities::nodes::{
-        RemindrElement,
-        node::RemindrNode,
-        text::data::{Metadata, TextNodeData},
+        NodePayload, RemindrElement,
+        text::data::{TextMetadata, TextNodeData},
     },
     states::node_state::NodeState,
 };
@@ -130,17 +128,15 @@ impl TextNode {
         self.menu.update(cx, |state, _| state.search = None);
 
         self.state.update(cx, |state, cx| {
-            let id = Utils::generate_uuid();
-            let data = to_value(TextNodeData::new(id, Metadata::default())).unwrap();
-
-            let element = cx.new(|cx| TextNode::parse(&data, &self.state, window, cx).unwrap());
-            element.update(cx, |this, cx| {
-                this.focus(window, cx);
-            });
-
-            let node = RemindrNode::new(id, RemindrElement::Text(element));
-
-            state.insert_node_after(self.data.id, &node);
+            state.insert_node_after(
+                self.data.id,
+                &RemindrElement::create_node(
+                    NodePayload::Text((TextMetadata::default(), true)),
+                    &self.state,
+                    window,
+                    cx,
+                ),
+            );
         });
     }
 

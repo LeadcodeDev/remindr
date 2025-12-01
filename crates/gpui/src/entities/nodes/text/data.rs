@@ -5,21 +5,21 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextNodeData {
     pub id: Uuid,
-    pub metadata: Metadata,
+    pub metadata: TextMetadata,
 }
 
 impl TextNodeData {
-    pub fn new(id: Uuid, metadata: Metadata) -> Self {
+    pub fn new(id: Uuid, metadata: TextMetadata) -> Self {
         Self { id, metadata }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Metadata {
+pub struct TextMetadata {
     pub content: SharedString,
 }
 
-impl Default for Metadata {
+impl Default for TextMetadata {
     fn default() -> Self {
         Self {
             content: SharedString::new(""),
