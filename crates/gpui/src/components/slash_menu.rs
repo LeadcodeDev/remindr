@@ -186,7 +186,7 @@ impl Render for SlashMenu {
                         .flex_1()
                         .gap_1()
                         .child(
-                            Label::new("This is a label")
+                            Label::new("Components")
                                 .text_xs()
                                 .font_semibold()
                                 .opacity(0.5),

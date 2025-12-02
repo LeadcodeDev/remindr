@@ -60,24 +60,20 @@ impl RemindrElement {
             NodePayload::Text((payload, is_focus)) => {
                 let data = to_value(TextNodeData::new(id, payload)).unwrap();
 
-                let element = cx.new(|cx| HeadingNode::parse(&data, &state, window, cx).unwrap());
+                let element = cx.new(|cx| TextNode::parse(&data, &state, window, cx).unwrap());
                 if is_focus {
                     element.update(cx, |this, cx| {
                         this.focus(window, cx);
                     });
                 }
 
-                RemindrElement::Heading(element)
+                RemindrElement::Text(element)
             }
             NodePayload::Divider => {
                 let data = to_value(DividerNodeData { id }).unwrap();
+                let element = cx.new(|cx| DividerNode::parse(&data, window, cx).unwrap());
 
-                let element = cx.new(|cx| HeadingNode::parse(&data, &state, window, cx).unwrap());
-                element.update(cx, |this, cx| {
-                    this.focus(window, cx);
-                });
-
-                RemindrElement::Heading(element)
+                RemindrElement::Divider(element)
             }
         };
 

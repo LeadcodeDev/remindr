@@ -38,27 +38,9 @@ impl HeadingNode {
     ) -> Result<Self, Error> {
         let data = from_value::<HeadingNodeData>(data.clone())?;
 
-        let input_state = Self::init(data.metadata.content.clone(), window, cx);
-        let menu = cx.new(|cx| SlashMenu::new(data.id, state, window, cx));
-
-        Ok(Self {
-            state: state.clone(),
-            data,
-            input_state,
-            show_contextual_menu: false,
-            menu,
-            is_focus: false,
-        })
-    }
-
-    fn init(
-        content: SharedString,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .default_value(content)
+                .default_value(data.metadata.content.clone())
                 .auto_grow(1, INFINITY as usize)
                 .soft_wrap(true)
         });
@@ -73,7 +55,16 @@ impl HeadingNode {
         })
         .detach();
 
-        input_state
+        let menu = cx.new(|cx| SlashMenu::new(data.id, state, window, cx));
+
+        Ok(Self {
+            state: state.clone(),
+            data,
+            input_state,
+            show_contextual_menu: false,
+            menu,
+            is_focus: false,
+        })
     }
 
     fn on_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
