@@ -5,17 +5,11 @@ use gpui_component::{
     label::Label,
     popover::Popover,
 };
-use serde_json::to_value;
 use uuid::Uuid;
 
 use crate::{
-    Utils,
     entities::nodes::{
-        NodePayload, RemindrElement,
-        divider::{data::DividerNodeData, divider_node::DividerNode},
-        heading::data::HeadingMetadata,
-        node::RemindrNode,
-        text::data::TextMetadata,
+        NodePayload, RemindrElement, heading::data::HeadingMetadata, text::data::TextMetadata,
     },
     states::node_state::NodeState,
 };
@@ -157,14 +151,10 @@ impl SlashMenu {
         let current_slash_menu_id = this.related_id;
 
         this.state.update(cx, |state, cx| {
-            let id = Utils::generate_uuid();
-            let data = to_value(DividerNodeData { id }).unwrap();
-
-            let element = cx.new(|cx| DividerNode::parse(&data, window, cx).unwrap());
-            let node = RemindrNode::new(id, RemindrElement::Divider(element));
+            let node = RemindrElement::create_node(NodePayload::Divider, &this.state, window, cx);
 
             state.insert_node_after(this.related_id, &node);
-            this.related_id = id;
+            this.related_id = node.id;
         });
 
         Self::on_insert_paragraph(this, event, window, cx);

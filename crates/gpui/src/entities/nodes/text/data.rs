@@ -14,15 +14,7 @@ impl TextNodeData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TextMetadata {
     pub content: SharedString,
-}
-
-impl Default for TextMetadata {
-    fn default() -> Self {
-        Self {
-            content: SharedString::new(""),
-        }
-    }
 }
