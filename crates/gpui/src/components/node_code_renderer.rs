@@ -11,7 +11,6 @@ pub struct NodeCodeRenderer {
 
 impl NodeCodeRenderer {
     pub fn new(nodes: Vec<RemindrNode>, window: &mut Window, cx: &mut App) -> Self {
-        println!("rerender");
         let mut editor_buffer = String::new();
 
         for node in nodes {

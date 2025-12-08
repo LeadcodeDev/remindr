@@ -2,8 +2,10 @@ use std::borrow::Cow;
 
 use anyhow::anyhow;
 use gpui::*;
-use gpui_component::Root;
-use remindr_gpui::{screens::AppRouter, states::document_state::DocumentState};
+use gpui_component::{Root, theme};
+use remindr_gpui::{
+    entities::remindr::Remindr, screens::AppRouter, states::document_state::DocumentState,
+};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
@@ -25,12 +27,21 @@ impl AssetSource for Assets {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let app = Application::new().with_assets(Assets);
+    let remindr = Remindr::new();
+
+    let settings = remindr.load_settings().await;
 
     app.run(move |cx| {
         gpui_component::init(cx);
         gpui_router::init(cx);
+        theme::init(cx);
+
+        if let Ok(settings) = settings {
+            cx.set_global(settings);
+        }
 
         cx.set_global(DocumentState {
             documents: Vec::new(),
@@ -47,6 +58,8 @@ fn main() {
         let window_bounds = Bounds::centered(None, window_size, cx);
 
         cx.spawn(async move |cx| {
+            let _ = remindr.init().await;
+
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
                 window_min_size: Some(gpui::Size {

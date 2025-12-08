@@ -17,7 +17,7 @@ pub struct DocumentScreen {
 }
 
 impl DocumentScreen {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(_: &mut Context<Self>) -> Self {
         Self {
             current_index: 0,
             current_document: None,
