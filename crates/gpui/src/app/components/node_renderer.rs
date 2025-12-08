@@ -3,8 +3,11 @@ use gpui_component::{ActiveTheme, Icon, IconName};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{
-    entities::nodes::{NodePayload, RemindrElement, text::data::TextMetadata},
+use crate::app::{
+    components::nodes::{
+        element::{NodePayload, RemindrElement},
+        text::data::TextMetadata,
+    },
     states::node_state::{MovingElement, NodeState},
 };
 

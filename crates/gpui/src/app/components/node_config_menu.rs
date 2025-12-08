@@ -7,7 +7,7 @@ use gpui_component::{
 };
 use uuid::Uuid;
 
-use crate::{components::node_renderer::DraggableInfo, states::node_state::NodeState};
+use crate::app::{components::node_renderer::DraggableInfo, states::node_state::NodeState};
 
 pub struct NodeConfigMenu {
     related_id: Uuid,

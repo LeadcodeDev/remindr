@@ -1,7 +1,7 @@
 use gpui::{AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div};
 use gpui_router::{Route, Routes};
 
-use crate::{
+use crate::app::{
     components::layout::Layout,
     screens::{
         document_screen::DocumentScreen, home_screen::HomeScreen, login_screen::LoginScreen,

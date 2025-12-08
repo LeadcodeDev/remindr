@@ -1,7 +1,7 @@
 use gpui::{App, AppContext, Entity, Global, Window};
 use serde_json::Value;
 
-use crate::components::node_renderer::NodeRenderer;
+use crate::app::components::node_renderer::NodeRenderer;
 
 #[derive(Clone)]
 pub struct Document {

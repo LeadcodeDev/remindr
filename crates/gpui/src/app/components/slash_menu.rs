@@ -7,9 +7,11 @@ use gpui_component::{
 };
 use uuid::Uuid;
 
-use crate::{
-    entities::nodes::{
-        NodePayload, RemindrElement, heading::data::HeadingMetadata, text::data::TextMetadata,
+use crate::app::{
+    components::nodes::{
+        element::{NodePayload, RemindrElement},
+        heading::data::HeadingMetadata,
+        text::data::TextMetadata,
     },
     states::node_state::NodeState,
 };

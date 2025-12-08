@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entities::nodes::RemindrElement;
+use crate::app::components::nodes::element::RemindrElement;
 
 #[derive(Clone)]
 pub struct RemindrNode {

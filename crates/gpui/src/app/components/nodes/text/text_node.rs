@@ -1,42 +1,38 @@
 use std::f32::INFINITY;
 
 use anyhow::{Error, Ok};
-use gpui::{prelude::FluentBuilder, *};
+use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Position};
-use serde_json::{Value, from_value, to_value};
+use serde_json::{Value, from_value};
 
-use crate::{
-    Utils,
-    components::slash_menu::SlashMenu,
-    entities::nodes::{
-        RemindrElement,
-        heading::data::HeadingNodeData,
-        node::RemindrNode,
-        text::{
-            data::{TextMetadata, TextNodeData},
-            text_node::TextNode,
+use crate::app::{
+    components::{
+        nodes::{
+            element::{NodePayload, RemindrElement},
+            text::data::{TextMetadata, TextNodeData},
         },
+        slash_menu::SlashMenu,
     },
     states::node_state::NodeState,
 };
 
-pub struct HeadingNode {
+pub struct TextNode {
     pub state: Entity<NodeState>,
-    pub data: HeadingNodeData,
+    pub data: TextNodeData,
     pub input_state: Entity<InputState>,
     show_contextual_menu: bool,
     menu: Entity<SlashMenu>,
     is_focus: bool,
 }
 
-impl HeadingNode {
+impl TextNode {
     pub fn parse(
         data: &Value,
         state: &Entity<NodeState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, Error> {
-        let data = from_value::<HeadingNodeData>(data.clone())?;
+        let data = from_value::<TextNodeData>(data.clone())?;
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -54,7 +50,6 @@ impl HeadingNode {
             }
         })
         .detach();
-
         let menu = cx.new(|cx| SlashMenu::new(data.id, state, window, cx));
 
         Ok(Self {
@@ -86,18 +81,15 @@ impl HeadingNode {
             false
         };
 
-        self.show_contextual_menu = show_menu && self.is_focus;
-
-        if show_menu {
+        self.menu.update(cx, |state, _| {
+            state.open = show_menu && self.is_focus;
             let search_query = input_state_str
                 .rfind('/')
                 .map(|idx| SharedString::from(input_state_str[idx + 1..].to_string()))
                 .unwrap_or_default();
-            self.menu
-                .update(cx, |state, _| state.search = Some(search_query));
-        } else {
-            self.menu.update(cx, |state, _| state.search = None);
-        }
+
+            state.search = if show_menu { Some(search_query) } else { None }
+        });
 
         if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
             self.state.update(cx, |state, cx| {
@@ -138,22 +130,15 @@ impl HeadingNode {
         self.menu.update(cx, |state, _| state.search = None);
 
         self.state.update(cx, |state, cx| {
-            let id = Utils::generate_uuid();
-            let data = to_value(TextNodeData::new(
-                id,
-                "text".to_string(),
-                TextMetadata::default(),
-            ))
-            .unwrap();
-
-            let element = cx.new(|cx| TextNode::parse(&data, &self.state, window, cx).unwrap());
-            element.update(cx, |this, cx| {
-                this.focus(window, cx);
-            });
-
-            let node = RemindrNode::new(id, RemindrElement::Text(element));
-
-            state.insert_node_after(self.data.id, &node);
+            state.insert_node_after(
+                self.data.id,
+                &RemindrElement::create_node(
+                    NodePayload::Text((TextMetadata::default(), true)),
+                    &self.state,
+                    window,
+                    cx,
+                ),
+            );
         });
     }
 
@@ -174,7 +159,7 @@ impl HeadingNode {
     }
 }
 
-impl Render for HeadingNode {
+impl Render for TextNode {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .min_w(px(820.0))
@@ -182,11 +167,8 @@ impl Render for HeadingNode {
             .child(
                 Input::new(&self.input_state)
                     .bordered(false)
-                    .text_3xl()
                     .bg(transparent_white()),
             )
-            .when(self.show_contextual_menu, |this| {
-                this.child(self.menu.clone())
-            })
+            .child(self.menu.clone())
     }
 }

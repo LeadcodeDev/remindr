@@ -5,7 +5,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
 };
 
-use crate::{
+use crate::app::{
     components::node_code_renderer::NodeCodeRenderer,
     states::document_state::{Document, DocumentState},
 };

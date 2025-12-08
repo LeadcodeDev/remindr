@@ -1,10 +1,8 @@
 use chrono::Utc;
 use uuid::{NoContext, Timestamp, Uuid};
 
-pub mod components;
-pub mod entities;
-pub mod screens;
-pub mod states;
+pub mod app;
+pub mod inrastructure;
 
 pub struct Utils;
 

@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use anyhow::anyhow;
 use gpui::*;
 use gpui_component::{Root, theme};
-use remindr_gpui::{
-    entities::remindr::Remindr, screens::AppRouter, states::document_state::DocumentState,
+use remindr_gpui::app::{
+    remindr::Remindr, screens::AppRouter, states::document_state::DocumentState,
 };
 use rust_embed::RustEmbed;
 

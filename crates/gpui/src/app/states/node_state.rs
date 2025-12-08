@@ -2,9 +2,9 @@ use gpui::{App, AppContext, DragMoveEvent, Entity, Window};
 use serde_json::{Value, from_value};
 use uuid::Uuid;
 
-use crate::entities::nodes::{
-    RemindrElement,
+use crate::app::components::nodes::{
     divider::divider_node::DividerNode,
+    element::RemindrElement,
     heading::heading_node::HeadingNode,
     node::{PartialRemindrNode, RemindrNode, RemindrNodeType},
     text::text_node::TextNode,

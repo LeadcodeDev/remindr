@@ -4,7 +4,9 @@ use gpui_component::divider::Divider;
 use serde_json::{Value, from_value};
 use uuid::Uuid;
 
-use crate::{entities::nodes::divider::data::DividerNodeData, states::node_state::NodeState};
+use crate::app::{
+    components::nodes::divider::data::DividerNodeData, states::node_state::NodeState,
+};
 
 pub struct DividerNode {
     pub id: Uuid,

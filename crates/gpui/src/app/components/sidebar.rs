@@ -8,7 +8,7 @@ use gpui_component::{
 use gpui_router::use_navigate;
 use serde_json::{Value, from_str};
 
-use crate::states::document_state::DocumentState;
+use crate::app::states::document_state::DocumentState;
 
 #[derive(IntoElement)]
 pub struct AppSidebar;

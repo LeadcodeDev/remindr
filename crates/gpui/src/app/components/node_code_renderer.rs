@@ -2,7 +2,7 @@ use gpui::*;
 use gpui_component::input::{Input, InputState, TabSize};
 use serde_json::to_string_pretty;
 
-use crate::entities::nodes::{RemindrElement, node::RemindrNode};
+use crate::app::components::nodes::{element::RemindrElement, node::RemindrNode};
 
 #[derive(IntoElement)]
 pub struct NodeCodeRenderer {

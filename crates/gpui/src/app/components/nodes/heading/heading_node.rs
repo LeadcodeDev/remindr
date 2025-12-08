@@ -1,36 +1,46 @@
 use std::f32::INFINITY;
 
 use anyhow::{Error, Ok};
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 use gpui_component::input::{Input, InputEvent, InputState, Position};
-use serde_json::{Value, from_value};
+use serde_json::{Value, from_value, to_value};
 
 use crate::{
-    components::slash_menu::SlashMenu,
-    entities::nodes::{
-        NodePayload, RemindrElement,
-        text::data::{TextMetadata, TextNodeData},
+    Utils,
+    app::{
+        components::{
+            nodes::{
+                element::RemindrElement,
+                heading::data::HeadingNodeData,
+                node::RemindrNode,
+                text::{
+                    data::{TextMetadata, TextNodeData},
+                    text_node::TextNode,
+                },
+            },
+            slash_menu::SlashMenu,
+        },
+        states::node_state::NodeState,
     },
-    states::node_state::NodeState,
 };
 
-pub struct TextNode {
+pub struct HeadingNode {
     pub state: Entity<NodeState>,
-    pub data: TextNodeData,
+    pub data: HeadingNodeData,
     pub input_state: Entity<InputState>,
     show_contextual_menu: bool,
     menu: Entity<SlashMenu>,
     is_focus: bool,
 }
 
-impl TextNode {
+impl HeadingNode {
     pub fn parse(
         data: &Value,
         state: &Entity<NodeState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, Error> {
-        let data = from_value::<TextNodeData>(data.clone())?;
+        let data = from_value::<HeadingNodeData>(data.clone())?;
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -48,6 +58,7 @@ impl TextNode {
             }
         })
         .detach();
+
         let menu = cx.new(|cx| SlashMenu::new(data.id, state, window, cx));
 
         Ok(Self {
@@ -79,15 +90,18 @@ impl TextNode {
             false
         };
 
-        self.menu.update(cx, |state, _| {
-            state.open = show_menu && self.is_focus;
+        self.show_contextual_menu = show_menu && self.is_focus;
+
+        if show_menu {
             let search_query = input_state_str
                 .rfind('/')
                 .map(|idx| SharedString::from(input_state_str[idx + 1..].to_string()))
                 .unwrap_or_default();
-
-            state.search = if show_menu { Some(search_query) } else { None }
-        });
+            self.menu
+                .update(cx, |state, _| state.search = Some(search_query));
+        } else {
+            self.menu.update(cx, |state, _| state.search = None);
+        }
 
         if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
             self.state.update(cx, |state, cx| {
@@ -128,15 +142,22 @@ impl TextNode {
         self.menu.update(cx, |state, _| state.search = None);
 
         self.state.update(cx, |state, cx| {
-            state.insert_node_after(
-                self.data.id,
-                &RemindrElement::create_node(
-                    NodePayload::Text((TextMetadata::default(), true)),
-                    &self.state,
-                    window,
-                    cx,
-                ),
-            );
+            let id = Utils::generate_uuid();
+            let data = to_value(TextNodeData::new(
+                id,
+                "text".to_string(),
+                TextMetadata::default(),
+            ))
+            .unwrap();
+
+            let element = cx.new(|cx| TextNode::parse(&data, &self.state, window, cx).unwrap());
+            element.update(cx, |this, cx| {
+                this.focus(window, cx);
+            });
+
+            let node = RemindrNode::new(id, RemindrElement::Text(element));
+
+            state.insert_node_after(self.data.id, &node);
         });
     }
 
@@ -157,7 +178,7 @@ impl TextNode {
     }
 }
 
-impl Render for TextNode {
+impl Render for HeadingNode {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .min_w(px(820.0))
@@ -165,8 +186,11 @@ impl Render for TextNode {
             .child(
                 Input::new(&self.input_state)
                     .bordered(false)
+                    .text_3xl()
                     .bg(transparent_white()),
             )
-            .child(self.menu.clone())
+            .when(self.show_contextual_menu, |this| {
+                this.child(self.menu.clone())
+            })
     }
 }

@@ -1,26 +1,23 @@
 use crate::{
     Utils,
-    entities::nodes::{
-        divider::{data::DividerNodeData, divider_node::DividerNode},
-        heading::{
-            data::{HeadingMetadata, HeadingNodeData},
-            heading_node::HeadingNode,
+    app::{
+        components::nodes::{
+            divider::{data::DividerNodeData, divider_node::DividerNode},
+            heading::{
+                data::{HeadingMetadata, HeadingNodeData},
+                heading_node::HeadingNode,
+            },
+            node::RemindrNode,
+            text::{
+                data::{TextMetadata, TextNodeData},
+                text_node::TextNode,
+            },
         },
-        node::RemindrNode,
-        text::{
-            data::{TextMetadata, TextNodeData},
-            text_node::TextNode,
-        },
+        states::node_state::NodeState,
     },
-    states::node_state::NodeState,
 };
 use gpui::{AnyElement, App, AppContext, Context, Entity, IntoElement, Render, RenderOnce, Window};
 use serde_json::to_value;
-
-pub mod divider;
-pub mod heading;
-pub mod node;
-pub mod text;
 
 pub enum NodePayload {
     Text((TextMetadata, bool)),
