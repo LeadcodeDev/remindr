@@ -1,7 +1,8 @@
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
-    ActiveTheme, Icon, Sizable,
+    ActiveTheme, Icon, Sizable, WindowExt,
     button::{Button, ButtonVariants},
+    notification::{Notification, NotificationType},
     tab::{Tab, TabBar},
 };
 use gpui_nav::{Screen, ScreenContext};
@@ -39,14 +40,35 @@ impl DocumentScreen {
 
 impl Render for DocumentScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (documents, current_document, current_index) =
-            cx.read_global::<DocumentState, _>(|state, _| {
+        let (documents, current_document, current_index, pending_notification) = cx
+            .read_global::<DocumentState, _>(|state, _| {
                 let documents = state.documents.clone().into_iter().collect::<Vec<_>>();
                 let current_document = state.current_document.clone();
                 let current_index = state.get_current_document_index();
+                let pending_notification = state.pending_notification;
 
-                (documents, current_document, current_index)
+                (
+                    documents,
+                    current_document,
+                    current_index,
+                    pending_notification,
+                )
             });
+
+        if pending_notification {
+            window.push_notification(
+                Notification::new()
+                    .title("Update Available")
+                    .message("A new version of the application is ready to install.")
+                    .with_type(NotificationType::Info),
+                cx,
+            );
+
+            // clear the flag so notification is shown only once
+            cx.update_global::<DocumentState, _>(|state, _| {
+                state.pending_notification = false;
+            });
+        }
 
         div()
             .w_full()
@@ -55,12 +77,9 @@ impl Render for DocumentScreen {
                     TabBar::new("tabs")
                         .selected_index(current_index.unwrap_or(0))
                         .on_click(cx.listener(|_, index: &usize, _, cx| {
-                            let documents = cx.read_global::<DocumentState, _>(|state, _| {
-                                state.documents.clone().into_iter().collect::<Vec<_>>()
-                            });
-
-                            cx.update_global::<DocumentState, _>(|state, cx| {
-                                state.current_document = documents.get(*index).cloned();
+                            cx.update_global::<DocumentState, _>(|state, _| {
+                                let docs = state.documents.clone().into_iter().collect::<Vec<_>>();
+                                state.current_document = docs.get(*index).cloned();
                             });
 
                             cx.notify();

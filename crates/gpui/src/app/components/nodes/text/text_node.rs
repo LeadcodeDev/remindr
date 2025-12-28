@@ -13,7 +13,7 @@ use crate::app::{
         },
         slash_menu::SlashMenu,
     },
-    states::node_state::NodeState,
+    states::{document_state::DocumentState, node_state::NodeState},
 };
 
 pub struct TextNode {
@@ -112,10 +112,17 @@ impl TextNode {
                             });
                         }
                     }
+
+                    cx.update_global::<DocumentState, _>(|state, app_cx| {
+                        state.mark_changed(window, app_cx);
+                    });
                 }
             });
         } else {
             self.data.metadata.content = input_state_value;
+            cx.update_global::<DocumentState, _>(|state, app_cx| {
+                state.mark_changed(window, app_cx);
+            });
         }
     }
 
@@ -139,6 +146,10 @@ impl TextNode {
                     cx,
                 ),
             );
+        });
+
+        cx.update_global::<DocumentState, _>(|state, app_cx| {
+            state.mark_changed(window, app_cx);
         });
     }
 

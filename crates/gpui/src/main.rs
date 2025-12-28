@@ -68,10 +68,7 @@ async fn main() -> Result<(), Error> {
             documents: DocumentRepository::new(pool),
         });
 
-        cx.set_global(DocumentState {
-            documents: Vec::new(),
-            current_document: None,
-        });
+        cx.set_global(DocumentState::default());
 
         cx.activate(true);
 

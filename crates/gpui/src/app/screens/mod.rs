@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, Root};
 
 use crate::app::{
     components::sidebar::AppSidebar, screens::home_screen::HomeScreen, states::app_state::AppState,
@@ -31,7 +31,9 @@ impl AppRouter {
 }
 
 impl Render for AppRouter {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let notification_layer = Root::render_notification_layer(window, cx);
+
         div()
             .w_full()
             .h_full()
@@ -44,5 +46,6 @@ impl Render for AppRouter {
                     AnyView::from(cx.new(|_| EmptyView))
                 },
             )
+            .children(notification_layer)
     }
 }

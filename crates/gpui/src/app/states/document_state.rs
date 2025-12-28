@@ -1,5 +1,7 @@
 use gpui::{App, AppContext, Entity, Global, Window};
 use serde_json::Value;
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
 
 use crate::app::components::node_renderer::NodeRenderer;
 
@@ -10,9 +12,19 @@ pub struct Document {
     pub renderer: Entity<NodeRenderer>,
 }
 
+#[derive(Clone, PartialEq)]
+pub enum PersistenceState {
+    Pending,
+    Idle,
+}
+
 pub struct DocumentState {
     pub documents: Vec<Document>,
     pub current_document: Option<Document>,
+
+    pub persistence: PersistenceState,
+    pub last_change: Option<Instant>,
+    pub pending_notification: bool,
 }
 
 impl DocumentState {
@@ -77,6 +89,44 @@ impl DocumentState {
 
     pub fn remove_document(&mut self, uid: String) {
         self.documents.retain(|element| element.uid != uid);
+    }
+
+    pub fn mark_changed(&mut self, _: &mut Window, cx: &mut App) {
+        self.persistence = PersistenceState::Pending;
+        let trigger_time = Instant::now();
+        self.last_change = Some(trigger_time);
+
+        cx.spawn(async move |cx| {
+            sleep(Duration::from_secs(1)).await;
+
+            let _ = cx.update_global::<DocumentState, _>(move |state, _| {
+                if let Some(last) = state.last_change {
+                    if last <= trigger_time {
+                        state.persistence = PersistenceState::Idle;
+                        state.pending_notification = true;
+                        println!("Persistence timer expired — state is now Idle");
+                    }
+                } else {
+                    state.persistence = PersistenceState::Idle;
+                    state.pending_notification = true;
+                }
+            });
+
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+}
+
+impl Default for DocumentState {
+    fn default() -> Self {
+        Self {
+            documents: Vec::new(),
+            current_document: None,
+            persistence: PersistenceState::Idle,
+            last_change: None,
+            pending_notification: false,
+        }
     }
 }
 

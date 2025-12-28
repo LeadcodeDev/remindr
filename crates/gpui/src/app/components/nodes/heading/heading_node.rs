@@ -126,8 +126,19 @@ impl HeadingNode {
                     }
                 }
             });
+
+            cx.update_global::<crate::app::states::document_state::DocumentState, _>(
+                |state, app| {
+                    state.mark_changed(window, app);
+                },
+            );
         } else {
             self.data.metadata.content = input_state_value;
+            cx.update_global::<crate::app::states::document_state::DocumentState, _>(
+                |state, app| {
+                    state.mark_changed(window, app);
+                },
+            );
         }
     }
 
@@ -158,6 +169,11 @@ impl HeadingNode {
             let node = RemindrNode::new(id, RemindrElement::Text(element));
 
             state.insert_node_after(self.data.id, &node);
+            cx.update_global::<crate::app::states::document_state::DocumentState, _>(
+                |state, app| {
+                    state.mark_changed(window, app);
+                },
+            );
         });
     }
 
