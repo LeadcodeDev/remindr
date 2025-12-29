@@ -14,7 +14,6 @@ use crate::app::{
 
 pub struct DocumentScreen {
     _ctx: ScreenContext<AppState>,
-
     show_code: bool,
 }
 
@@ -137,24 +136,19 @@ impl Render for DocumentScreen {
                         .h_full()
                         .w_full()
                         .child(
-                            div()
-                                .max_w(px(820.0))
-                                .w_full()
-                                .mx_auto()
-                                .py_5()
-                                .when_some(current_document.clone(), |this, element| {
-                                    this.child(element.renderer.clone())
-                                }),
+                            div().max_w(px(820.0)).w_full().mx_auto().py_5().when_some(
+                                current_document
+                                    .clone()
+                                    .and_then(|doc| doc.renderer.clone()),
+                                |this, renderer| this.child(renderer),
+                            ),
                         )
                         .when(self.show_code, |this| {
-                            let nodes = current_document.clone().map(|document| {
+                            let nodes = current_document.clone().and_then(|document| {
                                 document
                                     .renderer
-                                    .read(cx)
-                                    .state
-                                    .read(cx)
-                                    .get_nodes()
                                     .clone()
+                                    .map(|r| r.read(cx).state.read(cx).get_nodes().clone())
                             });
 
                             this.when_some(nodes, |this, nodes| {

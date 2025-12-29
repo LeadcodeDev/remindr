@@ -9,7 +9,8 @@ use crate::app::components::node_renderer::NodeRenderer;
 pub struct Document {
     pub uid: String,
     pub title: String,
-    pub renderer: Entity<NodeRenderer>,
+    pub nodes: Vec<Value>,
+    pub renderer: Option<Entity<NodeRenderer>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -62,11 +63,12 @@ impl DocumentState {
     ) {
         let already_has_document = self.documents.iter().any(|element| element.uid == uid);
         if !already_has_document {
-            let renderer = NodeRenderer::new(nodes, window, cx);
+            let renderer = NodeRenderer::new(nodes.clone(), window, cx);
             self.documents.push(Document {
                 uid,
                 title,
-                renderer: cx.new(|_| renderer),
+                nodes,
+                renderer: Some(cx.new(|_| renderer)),
             });
         }
     }
@@ -87,6 +89,27 @@ impl DocumentState {
             .find(|element| element.uid == uid)
     }
 
+    pub fn add_persisted_document(&mut self, uid: String, title: String, nodes: Vec<Value>) {
+        let already_has_document = self.documents.iter().any(|element| element.uid == uid);
+        if !already_has_document {
+            self.documents.push(Document {
+                uid,
+                title,
+                nodes,
+                renderer: None,
+            });
+        }
+    }
+
+    pub fn ensure_renderer_for(&mut self, uid: &str, window: &mut Window, cx: &mut App) {
+        if let Some(doc) = self.documents.iter_mut().find(|d| d.uid == uid) {
+            if doc.renderer.is_none() {
+                let renderer = NodeRenderer::new(doc.nodes.clone(), window, cx);
+                doc.renderer = Some(cx.new(|_| renderer));
+            }
+        }
+    }
+
     pub fn remove_document(&mut self, uid: String) {
         self.documents.retain(|element| element.uid != uid);
     }
@@ -104,7 +127,6 @@ impl DocumentState {
                     if last <= trigger_time {
                         state.persistence = PersistenceState::Idle;
                         state.pending_notification = true;
-                        println!("Persistence timer expired — state is now Idle");
                     }
                 } else {
                     state.persistence = PersistenceState::Idle;

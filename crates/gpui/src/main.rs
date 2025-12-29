@@ -33,6 +33,8 @@ impl AssetSource for Assets {
     }
 }
 
+actions!(window, [Quit]);
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let app = Application::new().with_assets(Assets);
@@ -65,11 +67,10 @@ async fn main() -> Result<(), Error> {
         }
 
         cx.set_global(RepositoryState {
-            documents: DocumentRepository::new(pool),
+            documents: DocumentRepository::new(pool.clone()),
         });
 
         cx.set_global(DocumentState::default());
-
         cx.activate(true);
 
         let mut window_size = size(px(640.), px(480.));
@@ -108,7 +109,28 @@ async fn main() -> Result<(), Error> {
             Ok::<_, anyhow::Error>(())
         })
         .detach();
+
+        set_app_menus(cx);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     });
 
     Ok(())
+}
+
+fn set_app_menus(cx: &mut App) {
+    cx.set_dock_menu(vec![
+        MenuItem::os_submenu("Services", SystemMenuType::Services),
+        MenuItem::separator(),
+        MenuItem::action("Quit", Quit),
+    ]);
+
+    cx.set_menus(vec![Menu {
+        name: "set_menus".into(),
+        items: vec![
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Quit", Quit),
+        ],
+    }]);
 }
