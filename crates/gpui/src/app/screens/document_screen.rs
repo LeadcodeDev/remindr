@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
-    Disableable, Icon, Sizable, WindowExt,
+    Disableable, Icon, Sizable,
     button::{Button, ButtonVariants},
-    notification::{Notification, NotificationType},
     tab::{Tab, TabBar},
 };
 use gpui_nav::{Screen, ScreenContext};
@@ -13,7 +14,7 @@ use crate::{
         components::node_code_renderer::NodeCodeRenderer,
         states::{
             app_state::AppState,
-            document_state::{DocumentState, OpenedDocument},
+            document_state::{DocumentState, OpenedDocument, PersistenceState},
             repository_state::RepositoryState,
         },
     },
@@ -92,50 +93,47 @@ impl Render for DocumentScreen {
         // Trigger loading if needed
         self.load_document_if_needed(window, cx);
 
-        let (
-            documents,
-            current_document,
-            current_index,
-            pending_notification,
-            can_go_previous,
-            can_go_next,
-        ) = cx.read_global::<DocumentState, _>(|state, _| {
-            let documents: Vec<OpenedDocument> = state.documents.clone();
-            let current_document = state.get_current_document().cloned();
-            let current_index = state.get_current_document_index();
-            let pending_notification = state.pending_notification;
-            let can_go_previous = current_index.map(|i| i > 0).unwrap_or(false);
-            let can_go_next = current_index
-                .map(|i| i < documents.len().saturating_sub(1))
-                .unwrap_or(false);
+        let (documents, current_document, current_index, is_saving, can_go_previous, can_go_next) =
+            cx.read_global::<DocumentState, _>(|state, _| {
+                let documents: Vec<OpenedDocument> = state.documents.clone();
+                let current_document = state.get_current_document().cloned();
+                let current_index = state.get_current_document_index();
+                let is_saving = state.persistence == PersistenceState::Pending;
+                let can_go_previous = current_index.map(|i| i > 0).unwrap_or(false);
+                let can_go_next = current_index
+                    .map(|i| i < documents.len().saturating_sub(1))
+                    .unwrap_or(false);
 
-            (
-                documents,
-                current_document,
-                current_index,
-                pending_notification,
-                can_go_previous,
-                can_go_next,
-            )
-        });
-
-        if pending_notification {
-            window.push_notification(
-                Notification::new()
-                    .title("Document saved")
-                    .message("Your document has been saved successfully.")
-                    .with_type(NotificationType::Info),
-                cx,
-            );
-
-            cx.update_global::<DocumentState, _>(|state, _| {
-                state.pending_notification = false;
+                (
+                    documents,
+                    current_document,
+                    current_index,
+                    is_saving,
+                    can_go_previous,
+                    can_go_next,
+                )
             });
-        }
 
         div()
             .w_full()
             .h_full()
+            .relative()
+            .when(is_saving, |this| {
+                this.child(
+                    div().absolute().bottom_4().right_4().child(
+                        Icon::default()
+                            .path("icons/loader-circle.svg")
+                            .size_4()
+                            .with_animation(
+                                "rotate-loader",
+                                Animation::new(Duration::from_secs(1)).repeat(),
+                                |icon, delta| {
+                                    icon.transform(Transformation::rotate(percentage(delta)))
+                                },
+                            ),
+                    ),
+                )
+            })
             .when(!documents.is_empty(), |this| {
                 this.child(
                     TabBar::new("tabs")

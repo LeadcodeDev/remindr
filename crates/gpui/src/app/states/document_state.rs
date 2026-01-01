@@ -34,7 +34,6 @@ pub struct DocumentState {
 
     pub persistence: PersistenceState,
     pub last_change: Option<Instant>,
-    pub pending_notification: bool,
 }
 
 impl DocumentState {
@@ -121,7 +120,6 @@ impl DocumentState {
     pub fn mark_changed(&mut self, _: &mut Window, cx: &mut App) {
         let trigger_time = Instant::now();
 
-        self.persistence = PersistenceState::Pending;
         self.last_change = Some(trigger_time);
 
         let documents = cx.global::<RepositoryState>().documents.clone();
@@ -144,8 +142,8 @@ impl DocumentState {
                     let _ = cx.update_global::<DocumentState, _>(move |state, cx| {
                         if let Some(last) = state.last_change {
                             if last <= trigger_time {
-                                state.persistence = PersistenceState::Idle;
-                                state.pending_notification = true;
+                                // Debounce expired, start saving
+                                state.persistence = PersistenceState::Pending;
 
                                 let nodes = {
                                     let nodes = renderer.read(cx).state.clone();
@@ -162,15 +160,21 @@ impl DocumentState {
                                     content: Value::from_iter(nodes),
                                 };
 
-                                let _ = cx
-                                    .spawn(async move |_| {
-                                        documents.update_document(document_model).await
-                                    })
-                                    .detach();
+                                cx.spawn(async move |cx| {
+                                    let result = documents.update_document(document_model).await;
+
+                                    // Minimum display time for the loader
+                                    sleep(Duration::from_secs(1)).await;
+
+                                    // Mark as idle when save completes
+                                    let _ = cx.update_global::<DocumentState, _>(|state, _| {
+                                        state.persistence = PersistenceState::Idle;
+                                    });
+
+                                    result
+                                })
+                                .detach();
                             }
-                        } else {
-                            state.persistence = PersistenceState::Idle;
-                            state.pending_notification = true;
                         }
                     });
 
@@ -189,7 +193,6 @@ impl Default for DocumentState {
             current_opened_document: None,
             persistence: PersistenceState::Idle,
             last_change: None,
-            pending_notification: false,
         }
     }
 }
