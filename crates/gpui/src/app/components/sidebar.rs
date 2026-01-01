@@ -56,29 +56,82 @@ impl AppSidebar {
             .items_center()
             .child("Documents")
             .child(
-                Button::new("reload-documents")
-                    .icon(Icon::default().path("icons/refresh-cw.svg"))
-                    .ghost()
-                    .xsmall()
-                    .tooltip("Reload documents")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let repository = cx.global::<RepositoryState>().documents.clone();
-                        let this_clone = cx.entity().clone();
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("create-document")
+                            .icon(Icon::default().path("icons/plus.svg"))
+                            .ghost()
+                            .xsmall()
+                            .tooltip("New document")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let repository = cx.global::<RepositoryState>().documents.clone();
+                                let this_clone = cx.entity().clone();
+                                let app_state = this.app_state.clone();
 
-                        this.document_state = LoadingState::Loading;
+                                cx.spawn(async move |_, cx| {
+                                    // Create a new document with default content
+                                    let new_document = DocumentModel {
+                                        id: 0,
+                                        title: "Untitled".to_string(),
+                                        content: serde_json::json!([]),
+                                    };
 
-                        cx.spawn(async move |_, cx| {
-                            let documents = repository.get_documents().await;
-                            if let Ok(documents) = documents {
-                                let _ = this_clone.update(cx, |state, _| {
-                                    state.document_state = LoadingState::Loaded(documents);
-                                });
-                            }
+                                    // Insert into database
+                                    let new_id = repository.insert_document(new_document).await?;
 
-                            Ok::<_, anyhow::Error>(())
-                        })
-                        .detach();
-                    })),
+                                    // Refresh documents list
+                                    let documents = repository.get_documents().await?;
+
+                                    let _ = cx.update(|cx| {
+                                        // Update sidebar
+                                        let _ = this_clone.update(cx, |state, _| {
+                                            state.document_state = LoadingState::Loaded(documents);
+                                        });
+
+                                        // Open the new document
+                                        cx.update_global::<DocumentState, _>(|state, _| {
+                                            state.open_document(new_id, "Untitled".to_string());
+                                        });
+
+                                        // Navigate to document screen
+                                        app_state.update(cx, |app_state, cx| {
+                                            let document_screen =
+                                                DocumentScreen::new(cx.weak_entity());
+                                            app_state.navigator.push(document_screen, cx);
+                                        });
+                                    });
+
+                                    Ok::<_, anyhow::Error>(())
+                                })
+                                .detach();
+                            })),
+                    )
+                    .child(
+                        Button::new("reload-documents")
+                            .icon(Icon::default().path("icons/refresh-cw.svg"))
+                            .ghost()
+                            .xsmall()
+                            .tooltip("Reload documents")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let repository = cx.global::<RepositoryState>().documents.clone();
+                                let this_clone = cx.entity().clone();
+
+                                this.document_state = LoadingState::Loading;
+
+                                cx.spawn(async move |_, cx| {
+                                    let documents = repository.get_documents().await;
+                                    if let Ok(documents) = documents {
+                                        let _ = this_clone.update(cx, |state, _| {
+                                            state.document_state = LoadingState::Loaded(documents);
+                                        });
+                                    }
+
+                                    Ok::<_, anyhow::Error>(())
+                                })
+                                .detach();
+                            })),
+                    ),
             )
     }
 

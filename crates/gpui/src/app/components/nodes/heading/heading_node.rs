@@ -44,6 +44,7 @@ impl HeadingNode {
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
+                .placeholder("New document")
                 .default_value(data.metadata.content.clone())
                 .auto_grow(1, INFINITY as usize)
                 .soft_wrap(true)

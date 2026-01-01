@@ -161,7 +161,10 @@ impl NodeState {
     }
 
     pub fn get_previous_node(&self, id: Uuid) -> Option<RemindrNode> {
-        let index = self.elements.iter().position(|node| node.id == id).unwrap();
+        let index = self.elements.iter().position(|node| node.id == id)?;
+        if index == 0 {
+            return None;
+        }
         self.elements.get(index - 1).cloned()
     }
 }

@@ -4,6 +4,8 @@ use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
     Disableable, Icon, Sizable,
     button::{Button, ButtonVariants},
+    input::Input,
+    scroll::ScrollableElement,
     tab::{Tab, TabBar},
 };
 use gpui_nav::{Screen, ScreenContext};
@@ -255,13 +257,12 @@ impl DocumentScreen {
         match current_document {
             Some(doc) => match &doc.state {
                 LoadingState::Loading => DocumentLoading.into_any_element(),
-
                 LoadingState::Loaded(content) => DocumentStateLoaded {
+                    document_id: doc.uid,
                     content: content.clone(),
                     show_code: self.show_code,
                 }
                 .into_any_element(),
-
                 LoadingState::Error(error) => DocumentLoadingError {
                     error: error.to_string(),
                 }
@@ -305,36 +306,66 @@ impl RenderOnce for DocumentLoadingError {
 
 #[derive(IntoElement)]
 struct DocumentStateLoaded {
+    document_id: i32,
     content: DocumentContent,
     show_code: bool,
 }
 
 impl RenderOnce for DocumentStateLoaded {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        div()
-            .flex()
-            .gap_10()
-            .h_full()
-            .w_full()
-            .child(
-                div()
-                    .max_w(px(820.0))
-                    .w_full()
-                    .mx_auto()
-                    .py_5()
-                    .child(self.content.renderer.clone()),
-            )
-            .when(self.show_code, |this| {
-                let nodes = self
-                    .content
-                    .renderer
-                    .read(cx)
-                    .state
-                    .read(cx)
-                    .get_nodes()
-                    .clone();
-                this.child(NodeCodeRenderer::new(nodes, window, cx))
-            })
+        let document_id = self.document_id;
+        let title_input = self.content.title_input.clone();
+
+        cx.subscribe(
+            &title_input,
+            move |state, _event: &gpui_component::input::InputEvent, cx| {
+                let new_title = state.read(cx).value().to_string();
+                cx.update_global::<DocumentState, _>(|doc_state, _| {
+                    if let Some(doc) = doc_state
+                        .documents
+                        .iter_mut()
+                        .find(|d| d.uid == document_id)
+                    {
+                        doc.title = new_title;
+                    }
+                });
+            },
+        )
+        .detach();
+
+        div().flex().flex_col().h_full().w_full().child(
+            div()
+                .flex()
+                .gap_10()
+                .flex_1()
+                .overflow_y_scrollbar()
+                .child(
+                    div()
+                        .max_w(px(820.0))
+                        .w_full()
+                        .mx_auto()
+                        .py_5()
+                        .child(
+                            Input::new(&self.content.title_input)
+                                .appearance(false)
+                                .text_3xl()
+                                .ml_10()
+                                .large(),
+                        )
+                        .child(self.content.renderer.clone()),
+                )
+                .when(self.show_code, |this| {
+                    let nodes = self
+                        .content
+                        .renderer
+                        .read(cx)
+                        .state
+                        .read(cx)
+                        .get_nodes()
+                        .clone();
+                    this.child(NodeCodeRenderer::new(nodes, window, cx))
+                }),
+        )
     }
 }
 

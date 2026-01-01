@@ -1,6 +1,10 @@
 use gpui::{App, AppContext, Entity, Global, Window};
+use gpui_component::input::InputState;
 use serde_json::Value;
-use std::time::{Duration, Instant};
+use std::{
+    f64::INFINITY,
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 
 use crate::{
@@ -20,6 +24,7 @@ pub struct OpenedDocument {
 pub struct DocumentContent {
     pub nodes: Vec<Value>,
     pub renderer: Entity<NodeRenderer>,
+    pub title_input: Entity<InputState>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -90,9 +95,22 @@ impl DocumentState {
 
             let renderer = NodeRenderer::new(nodes.clone(), window, cx);
 
+            // Create title input state
+            let title = document.title.clone();
+            let title_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx)
+                    .placeholder("Untitled")
+                    .auto_grow(1, INFINITY as usize)
+                    .soft_wrap(true);
+
+                state.set_value(title, window, cx);
+                state
+            });
+
             doc.state = LoadingState::Loaded(DocumentContent {
                 nodes,
                 renderer: cx.new(|_| renderer),
+                title_input,
             });
         }
     }
