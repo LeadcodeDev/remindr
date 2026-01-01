@@ -18,7 +18,7 @@ use crate::{
                     text_node::TextNode,
                 },
             },
-            slash_menu::SlashMenu,
+            slash_menu::{SlashMenu, SlashMenuDismissEvent},
         },
         states::node_state::NodeState,
     },
@@ -62,6 +62,20 @@ impl HeadingNode {
 
         let menu = cx.new(|cx| SlashMenu::new(data.id, state, window, cx));
 
+        cx.subscribe_in(&menu, window, {
+            move |this, _, event: &SlashMenuDismissEvent, window, cx| {
+                if event.restore_focus {
+                    let input_state = this.input_state.clone();
+                    cx.defer_in(window, move |_, window, cx| {
+                        input_state.update(cx, |element, cx| {
+                            element.focus(window, cx);
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+
         Ok(Self {
             state: state.clone(),
             data,
@@ -91,17 +105,30 @@ impl HeadingNode {
             false
         };
 
-        self.show_contextual_menu = show_menu && self.is_focus;
+        let should_open = show_menu && self.is_focus;
+        let was_open = self.show_contextual_menu;
+        self.show_contextual_menu = should_open;
 
         if show_menu {
             let search_query = input_state_str
                 .rfind('/')
                 .map(|idx| SharedString::from(input_state_str[idx + 1..].to_string()))
                 .unwrap_or_default();
-            self.menu
-                .update(cx, |state, _| state.search = Some(search_query));
+            self.menu.update(cx, |state, cx| {
+                state.open = should_open;
+                state.search = Some(search_query);
+                // Focus the menu when it opens
+                if should_open && !was_open {
+                    state.focus_handle.focus(window);
+                }
+                cx.notify();
+            });
         } else {
-            self.menu.update(cx, |state, _| state.search = None);
+            self.menu.update(cx, |state, cx| {
+                state.open = false;
+                state.search = None;
+                cx.notify();
+            });
         }
 
         if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
@@ -144,6 +171,15 @@ impl HeadingNode {
     }
 
     fn on_press_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // If slash menu is open, confirm selection instead of creating new line
+        if self.show_contextual_menu {
+            self.menu.update(cx, |menu, cx| {
+                menu.confirm_selection(window, cx);
+            });
+            self.show_contextual_menu = false;
+            return;
+        }
+
         self.input_state.update(cx, |state, cx| {
             let value = state.value();
             state.set_value(value.trim().to_string(), window, cx);
@@ -178,6 +214,28 @@ impl HeadingNode {
         });
     }
 
+    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.show_contextual_menu {
+            return;
+        }
+
+        match event.keystroke.key.as_str() {
+            "up" => {
+                self.menu.update(cx, |menu, cx| {
+                    menu.move_selection_up(cx);
+                });
+                cx.stop_propagation();
+            }
+            "down" => {
+                self.menu.update(cx, |menu, cx| {
+                    menu.move_selection_down(cx);
+                });
+                cx.stop_propagation();
+            }
+            _ => {}
+        }
+    }
+
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_state.update(cx, |element, cx| {
             element.focus(window, cx);
@@ -196,10 +254,13 @@ impl HeadingNode {
 }
 
 impl Render for HeadingNode {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .min_w(px(820.0))
             .w_full()
+            .when(self.show_contextual_menu, |this| {
+                this.capture_key_down(cx.listener(Self::on_key_down))
+            })
             .child(
                 Input::new(&self.input_state)
                     .bordered(false)

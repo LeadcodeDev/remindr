@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
     ActiveTheme, Icon, Selectable, StyledExt,
     button::{Button, ButtonCustomVariant, ButtonVariants},
@@ -16,12 +16,22 @@ use crate::app::{
     states::node_state::NodeState,
 };
 
+const MENU_ITEMS_COUNT: usize = 3;
+
+pub struct SlashMenuDismissEvent {
+    /// If true, the focus should be restored to the original input
+    /// If false, a new element was inserted and has focus
+    pub restore_focus: bool,
+}
+
 #[derive(Clone)]
 pub struct SlashMenu {
     related_id: Uuid,
     pub state: Entity<NodeState>,
     pub open: bool,
     pub search: Option<SharedString>,
+    pub selected_index: usize,
+    pub focus_handle: FocusHandle,
 }
 
 impl SlashMenu {
@@ -29,23 +39,65 @@ impl SlashMenu {
         related_id: Uuid,
         state: &Entity<NodeState>,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Self {
         Self {
             related_id,
             state: state.clone(),
             open: false,
             search: None,
+            selected_index: 0,
+            focus_handle: cx.focus_handle(),
         }
+    }
+
+    pub fn move_selection_up(&mut self, cx: &mut Context<Self>) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        } else {
+            self.selected_index = MENU_ITEMS_COUNT - 1;
+        }
+        cx.notify();
+    }
+
+    pub fn move_selection_down(&mut self, cx: &mut Context<Self>) {
+        if self.selected_index < MENU_ITEMS_COUNT - 1 {
+            self.selected_index += 1;
+        } else {
+            self.selected_index = 0;
+        }
+        cx.notify();
+    }
+
+    pub fn confirm_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.selected_index {
+            0 => Self::on_insert_paragraph(self, &ClickEvent::default(), window, cx),
+            1 => Self::on_insert_heading(self, &ClickEvent::default(), window, cx),
+            2 => Self::on_insert_divider(self, &ClickEvent::default(), window, cx),
+            _ => {}
+        }
+        self.selected_index = 0;
+    }
+
+    pub fn reset_selection(&mut self) {
+        self.selected_index = 0;
     }
 
     fn render_item(
         &self,
+        index: usize,
         label: &'static str,
         icon: Icon,
         on_click: impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> Button {
+        let is_selected = self.selected_index == index;
+        let bg_color = if is_selected {
+            cx.theme().primary.opacity(0.15)
+        } else {
+            cx.theme().transparent
+        };
+
         let custom = ButtonCustomVariant::new(cx)
             .hover(cx.theme().primary.opacity(0.1))
             .active(cx.theme().secondary);
@@ -58,6 +110,7 @@ impl SlashMenu {
             .px_1()
             .cursor_pointer()
             .gap_2()
+            .bg(bg_color)
             .child(icon)
             .child(SharedString::new(label))
             .on_click(cx.listener(on_click))
@@ -116,6 +169,9 @@ impl SlashMenu {
         });
 
         this.open = false;
+        cx.emit(SlashMenuDismissEvent {
+            restore_focus: false,
+        });
         cx.notify();
     }
 
@@ -139,6 +195,9 @@ impl SlashMenu {
         });
 
         this.open = false;
+        cx.emit(SlashMenuDismissEvent {
+            restore_focus: false,
+        });
         cx.notify();
     }
 
@@ -163,58 +222,102 @@ impl SlashMenu {
         this.related_id = current_slash_menu_id;
 
         this.open = false;
+        cx.emit(SlashMenuDismissEvent {
+            restore_focus: false,
+        });
         cx.notify();
     }
 }
 
+impl EventEmitter<SlashMenuDismissEvent> for SlashMenu {}
+
+impl Focusable for SlashMenu {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for SlashMenu {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().child(
-            Popover::new("controlled-popover")
-                .anchor(Corner::TopLeft)
-                .trigger(Empty::default())
-                .open(self.open)
-                .on_open_change(cx.listener(|this, open: &bool, _, cx| {
-                    this.open = *open;
-                    cx.notify();
-                }))
-                .p_2()
-                .w(px(365.0))
-                .bg(cx.theme().secondary)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .gap_1()
-                        .child(
-                            Label::new("Components")
-                                .text_xs()
-                                .font_semibold()
-                                .opacity(0.5),
-                        )
-                        .children([
-                            self.render_item(
-                                "Paragraph",
-                                Icon::default().path("icons/pilcrow.svg"),
-                                Self::on_insert_paragraph,
-                                cx,
-                            ),
-                            self.render_item(
-                                "Heading",
-                                Icon::default().path("icons/heading.svg"),
-                                Self::on_insert_heading,
-                                cx,
-                            ),
-                            self.render_item(
-                                "Divider",
-                                Icon::default().path("icons/separator-horizontal.svg"),
-                                Self::on_insert_divider,
-                                cx,
-                            ),
-                        ]),
-                ),
-        )
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        this.move_selection_up(cx);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        this.move_selection_down(cx);
+                        cx.stop_propagation();
+                    }
+                    "enter" => {
+                        this.confirm_selection(window, cx);
+                        cx.stop_propagation();
+                    }
+                    "escape" => {
+                        this.open = false;
+                        cx.emit(SlashMenuDismissEvent {
+                            restore_focus: true,
+                        });
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
+            .child(
+                Popover::new("controlled-popover")
+                    .anchor(Corner::TopLeft)
+                    .trigger(Empty::default())
+                    .open(self.open)
+                    .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                        this.open = *open;
+                        if *open {
+                            this.focus_handle.focus(window);
+                        }
+                        cx.notify();
+                    }))
+                    .p_2()
+                    .w(px(365.0))
+                    .bg(cx.theme().secondary)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                Label::new("Components")
+                                    .text_xs()
+                                    .font_semibold()
+                                    .opacity(0.5),
+                            )
+                            .children([
+                                self.render_item(
+                                    0,
+                                    "Paragraph",
+                                    Icon::default().path("icons/pilcrow.svg"),
+                                    Self::on_insert_paragraph,
+                                    cx,
+                                ),
+                                self.render_item(
+                                    1,
+                                    "Heading",
+                                    Icon::default().path("icons/heading.svg"),
+                                    Self::on_insert_heading,
+                                    cx,
+                                ),
+                                self.render_item(
+                                    2,
+                                    "Divider",
+                                    Icon::default().path("icons/separator-horizontal.svg"),
+                                    Self::on_insert_divider,
+                                    cx,
+                                ),
+                            ]),
+                    ),
+            )
     }
 }
 
