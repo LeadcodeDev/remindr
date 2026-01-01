@@ -32,10 +32,13 @@ impl Render for TitleBar {
             .map(|s| s.theme.mode)
             .unwrap_or_default();
 
-        let icon = match theme_mode {
-            ThemeMode::Light => Icon::new(IconName::Sun),
-            ThemeMode::Dark => Icon::new(IconName::Moon),
-            ThemeMode::System => Icon::new(IconName::Sun).path("icons/sun-moon.svg"),
+        let (icon, tooltip_text) = match theme_mode {
+            ThemeMode::Light => (Icon::new(IconName::Sun), "Light mode"),
+            ThemeMode::Dark => (Icon::new(IconName::Moon), "Dark mode"),
+            ThemeMode::System => (
+                Icon::new(IconName::Sun).path("icons/sun-moon.svg"),
+                "System mode",
+            ),
         };
 
         div()
@@ -54,6 +57,7 @@ impl Render for TitleBar {
                     .icon(icon)
                     .ghost()
                     .small()
+                    .tooltip(tooltip_text)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.cycle_theme_mode(window, cx);
                     })),
