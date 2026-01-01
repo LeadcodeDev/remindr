@@ -4,22 +4,22 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::{
+    LoadingState,
     app::{components::node_renderer::NodeRenderer, states::repository_state::RepositoryState},
     domain::database::document::DocumentModel,
 };
 
 #[derive(Clone)]
-pub struct PartialDocument {
+pub struct OpenedDocument {
     pub uid: i32,
     pub title: String,
+    pub state: LoadingState<DocumentContent>,
 }
 
 #[derive(Clone)]
-pub struct Document {
-    pub uid: i32,
-    pub title: String,
+pub struct DocumentContent {
     pub nodes: Vec<Value>,
-    pub renderer: Option<Entity<NodeRenderer>>,
+    pub renderer: Entity<NodeRenderer>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -29,9 +29,7 @@ pub enum PersistenceState {
 }
 
 pub struct DocumentState {
-    pub opened_document_ids: Vec<i32>,
-    pub documents: Vec<Document>,
-
+    pub documents: Vec<OpenedDocument>,
     pub current_opened_document: Option<i32>,
 
     pub persistence: PersistenceState,
@@ -40,77 +38,80 @@ pub struct DocumentState {
 }
 
 impl DocumentState {
-    pub fn get_current_document_index(&self) -> Option<usize> {
-        self.documents.iter().position(|doc| {
-            doc.uid
-                == self
-                    .current_opened_document
-                    .as_ref()
-                    .map(|doc| doc.clone())
-                    .unwrap_or_default()
-        })
+    pub fn get_current_document(&self) -> Option<&OpenedDocument> {
+        self.current_opened_document
+            .and_then(|id| self.documents.iter().find(|doc| doc.uid == id))
     }
 
-    pub fn get_previous_document(&self, uid: i32) -> Option<Document> {
+    pub fn get_current_document_index(&self) -> Option<usize> {
+        self.current_opened_document
+            .and_then(|id| self.documents.iter().position(|doc| doc.uid == id))
+    }
+
+    pub fn get_previous_document(&self, uid: i32) -> Option<&OpenedDocument> {
         let current_index = self.documents.iter().position(|doc| doc.uid == uid);
-        if let Some(index) = current_index {
+        current_index.and_then(|index| {
             if index > 0 {
-                Some(self.documents[index - 1].clone())
+                Some(&self.documents[index - 1])
+            } else if self.documents.len() > 1 {
+                Some(&self.documents[1])
             } else {
                 None
             }
-        } else {
-            None
-        }
+        })
     }
 
-    pub fn add_document(&mut self, id: i32) {
-        if self.documents.iter().any(|doc| doc.uid == id) {
-            self.opened_document_ids.push(id);
-            return;
-        }
-        // let already_has_document = self.documents.iter().any(|element| element.uid == uid);
-        // if !already_has_document {
-        //     let renderer = NodeRenderer::new(nodes.clone(), window, cx);
-        //     self.documents.push(Document {
-        //         uid,
-        //         title,
-        //         nodes,
-        //         renderer: Some(cx.new(|_| renderer)),
-        //     });
-        // }
-    }
-
-    pub fn add_document_and_focus(&mut self, id: i32) {
-        self.add_document(id);
-        self.current_opened_document = Some(id);
-
-        // self.current_document = self
-        //     .documents
-        //     .clone()
-        //     .into_iter()
-        //     .find(|element| element.uid == uid)
-    }
-
-    pub fn add_persisted_document(&mut self, uid: i32, title: String, nodes: Vec<Value>) {
-        let already_has_document = self.documents.iter().any(|element| element.uid == uid);
-        if !already_has_document {
-            self.documents.push(Document {
-                uid,
+    /// Add a document tab with just metadata (loading state)
+    pub fn open_document(&mut self, id: i32, title: String) {
+        let already_exists = self.documents.iter().any(|doc| doc.uid == id);
+        if !already_exists {
+            self.documents.push(OpenedDocument {
+                uid: id,
                 title,
+                state: LoadingState::Loading,
+            });
+        }
+        self.current_opened_document = Some(id);
+    }
+
+    /// Set the loaded content for a document
+    pub fn set_document_content(
+        &mut self,
+        uid: i32,
+        document: DocumentModel,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(doc) = self.documents.iter_mut().find(|d| d.uid == uid) {
+            let nodes = document
+                .content
+                .as_array()
+                .map(|arr| arr.clone())
+                .unwrap_or_default();
+
+            let renderer = NodeRenderer::new(nodes.clone(), window, cx);
+
+            doc.state = LoadingState::Loaded(DocumentContent {
                 nodes,
-                renderer: None,
+                renderer: cx.new(|_| renderer),
             });
         }
     }
 
-    pub fn ensure_renderer_for(&mut self, uid: i32, window: &mut Window, cx: &mut App) {
+    /// Set error state for a document
+    pub fn set_document_error(&mut self, uid: i32, error: String) {
         if let Some(doc) = self.documents.iter_mut().find(|d| d.uid == uid) {
-            if doc.renderer.is_none() {
-                let renderer = NodeRenderer::new(doc.nodes.clone(), window, cx);
-                doc.renderer = Some(cx.new(|_| renderer));
-            }
+            doc.state = LoadingState::Error(error);
         }
+    }
+
+    /// Check if a document needs loading
+    pub fn needs_loading(&self, uid: i32) -> bool {
+        self.documents
+            .iter()
+            .find(|d| d.uid == uid)
+            .map(|d| matches!(d.state, LoadingState::Loading))
+            .unwrap_or(false)
     }
 
     pub fn remove_document(&mut self, uid: i32) {
@@ -127,23 +128,25 @@ impl DocumentState {
 
         let document = self
             .documents
-            .clone()
-            .into_iter()
-            .find(|document| Some(document.uid) == self.current_opened_document);
+            .iter()
+            .find(|doc| Some(doc.uid) == self.current_opened_document)
+            .cloned();
 
         if let Some(document) = document {
-            let renderer = document.renderer;
+            if let LoadingState::Loaded(content) = &document.state {
+                let renderer = content.renderer.clone();
+                let doc_uid = document.uid;
+                let doc_title = document.title.clone();
 
-            cx.spawn(async move |cx| {
-                sleep(Duration::from_secs(1)).await;
+                cx.spawn(async move |cx| {
+                    sleep(Duration::from_secs(1)).await;
 
-                let _ = cx.update_global::<DocumentState, _>(move |state, cx| {
-                    if let Some(last) = state.last_change {
-                        if last <= trigger_time {
-                            state.persistence = PersistenceState::Idle;
-                            state.pending_notification = true;
+                    let _ = cx.update_global::<DocumentState, _>(move |state, cx| {
+                        if let Some(last) = state.last_change {
+                            if last <= trigger_time {
+                                state.persistence = PersistenceState::Idle;
+                                state.pending_notification = true;
 
-                            if let Some(renderer) = renderer {
                                 let nodes = {
                                     let nodes = renderer.read(cx).state.clone();
                                     let nodes = nodes.read(cx).get_nodes().clone();
@@ -154,8 +157,8 @@ impl DocumentState {
                                 };
 
                                 let document_model = DocumentModel {
-                                    id: document.uid.clone(),
-                                    title: document.title.clone(),
+                                    id: doc_uid,
+                                    title: doc_title,
                                     content: Value::from_iter(nodes),
                                 };
 
@@ -165,16 +168,16 @@ impl DocumentState {
                                     })
                                     .detach();
                             }
+                        } else {
+                            state.persistence = PersistenceState::Idle;
+                            state.pending_notification = true;
                         }
-                    } else {
-                        state.persistence = PersistenceState::Idle;
-                        state.pending_notification = true;
-                    }
-                });
+                    });
 
-                Ok::<_, anyhow::Error>(())
-            })
-            .detach();
+                    Ok::<_, anyhow::Error>(())
+                })
+                .detach();
+            }
         }
     }
 }
@@ -183,7 +186,6 @@ impl Default for DocumentState {
     fn default() -> Self {
         Self {
             documents: Vec::new(),
-            opened_document_ids: Vec::new(),
             current_opened_document: None,
             persistence: PersistenceState::Idle,
             last_change: None,

@@ -7,9 +7,16 @@ use gpui_component::{
 };
 use gpui_nav::{Screen, ScreenContext};
 
-use crate::app::{
-    components::node_code_renderer::NodeCodeRenderer,
-    states::{app_state::AppState, document_state::DocumentState},
+use crate::{
+    LoadingState,
+    app::{
+        components::node_code_renderer::NodeCodeRenderer,
+        states::{
+            app_state::AppState,
+            document_state::{DocumentState, OpenedDocument},
+            repository_state::RepositoryState,
+        },
+    },
 };
 
 pub struct DocumentScreen {
@@ -35,20 +42,61 @@ impl DocumentScreen {
         this.show_code = !this.show_code;
         cx.notify();
     }
+
+    fn load_document_if_needed(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let needs_loading = cx.read_global::<DocumentState, _>(|state, _| {
+            state
+                .current_opened_document
+                .map(|id| state.needs_loading(id))
+                .unwrap_or(false)
+        });
+
+        if needs_loading {
+            let document_id =
+                cx.read_global::<DocumentState, _>(|state, _| state.current_opened_document);
+
+            if let Some(doc_id) = document_id {
+                let repository = cx.global::<RepositoryState>().documents.clone();
+                let window_handle = window.window_handle();
+
+                cx.spawn(async move |_, cx| {
+                    let result = repository.get_document_by_id(doc_id).await;
+
+                    match result {
+                        Ok(document) => {
+                            let _ = cx.update_window(window_handle, |_, window, cx| {
+                                cx.update_global::<DocumentState, _>(|state, cx| {
+                                    state.set_document_content(doc_id, document, window, cx);
+                                });
+                            });
+                        }
+                        Err(e) => {
+                            let _ = cx.update(|cx| {
+                                cx.update_global::<DocumentState, _>(|state, _| {
+                                    state.set_document_error(doc_id, e.to_string());
+                                });
+                            });
+                        }
+                    }
+
+                    Ok::<_, anyhow::Error>(())
+                })
+                .detach();
+            }
+        }
+    }
 }
 
 impl Render for DocumentScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Trigger loading if needed
+        self.load_document_if_needed(window, cx);
+
         let (documents, current_document, current_index, pending_notification) = cx
             .read_global::<DocumentState, _>(|state, _| {
-                let documents = state.documents.clone().into_iter().collect::<Vec<_>>();
-                let current_document = state
-                    .documents
-                    .clone()
-                    .into_iter()
-                    .find(|document| Some(document.uid) == state.current_opened_document);
-
-                let current_index = state.current_opened_document.clone();
+                let documents: Vec<OpenedDocument> = state.documents.clone();
+                let current_document = state.get_current_document().cloned();
+                let current_index = state.get_current_document_index();
                 let pending_notification = state.pending_notification;
 
                 (
@@ -62,13 +110,12 @@ impl Render for DocumentScreen {
         if pending_notification {
             window.push_notification(
                 Notification::new()
-                    .title("Update Available")
-                    .message("A new version of the application is ready to install.")
+                    .title("Document saved")
+                    .message("Your document has been saved successfully.")
                     .with_type(NotificationType::Info),
                 cx,
             );
 
-            // clear the flag so notification is shown only once
             cx.update_global::<DocumentState, _>(|state, _| {
                 state.pending_notification = false;
             });
@@ -76,13 +123,16 @@ impl Render for DocumentScreen {
 
         div()
             .w_full()
+            .h_full()
             .when(!documents.is_empty(), |this| {
                 this.child(
                     TabBar::new("tabs")
-                        .selected_index(current_index.map(|index| index as usize).unwrap_or(0))
+                        .selected_index(current_index.unwrap_or(0))
                         .on_click(cx.listener(|_, index: &usize, _, cx| {
                             cx.update_global::<DocumentState, _>(|state, _| {
-                                state.current_opened_document = Some(*index as i32);
+                                if let Some(doc) = state.documents.get(*index) {
+                                    state.current_opened_document = Some(doc.uid);
+                                }
                             });
                         }))
                         .children(documents.iter().map(|element| {
@@ -94,15 +144,14 @@ impl Render for DocumentScreen {
                                     .ghost()
                                     .tooltip("Close tab")
                                     .on_click({
-                                        let element_id = element.uid.clone();
+                                        let element_id = element.uid;
                                         cx.listener(move |_, _, _, cx| {
-                                            let element_id = element_id.clone();
                                             cx.update_global::<DocumentState, _>(|state, _| {
                                                 let previous_document =
-                                                    state.get_previous_document(element_id.clone());
+                                                    state.get_previous_document(element_id);
 
                                                 state.current_opened_document =
-                                                    previous_document.map(|document| document.uid);
+                                                    previous_document.map(|doc| doc.uid);
 
                                                 state.remove_document(element_id);
                                             })
@@ -131,35 +180,63 @@ impl Render for DocumentScreen {
                             ),
                         ),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .gap_10()
-                        .h_full()
-                        .w_full()
-                        .child(
-                            div().max_w(px(820.0)).w_full().mx_auto().py_5().when_some(
-                                current_document
-                                    .clone()
-                                    .and_then(|doc| doc.renderer.clone()),
-                                |this, renderer| this.child(renderer),
-                            ),
-                        )
-                        .when(self.show_code, |this| {
-                            let nodes = current_document.clone().and_then(|document| {
-                                document
-                                    .renderer
-                                    .clone()
-                                    .map(|r| r.read(cx).state.read(cx).get_nodes().clone())
-                            });
-
-                            this.when_some(nodes, |this, nodes| {
-                                this.child(NodeCodeRenderer::new(nodes, window, cx))
-                            })
-                        }),
-                )
+                .child(self.render_document_content(current_document, window, cx))
             })
-            .when_none(&current_document, |this| this.child(DocumentStateEmpty))
+            .when(documents.is_empty(), |this| this.child(DocumentStateEmpty))
+    }
+}
+
+impl DocumentScreen {
+    fn render_document_content(
+        &self,
+        current_document: Option<OpenedDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        match current_document {
+            Some(doc) => match &doc.state {
+                LoadingState::Loading => div()
+                    .flex()
+                    .w_full()
+                    .h_full()
+                    .items_center()
+                    .justify_center()
+                    .child("Loading..."),
+
+                LoadingState::Loaded(content) => div()
+                    .flex()
+                    .gap_10()
+                    .h_full()
+                    .w_full()
+                    .child(
+                        div()
+                            .max_w(px(820.0))
+                            .w_full()
+                            .mx_auto()
+                            .py_5()
+                            .child(content.renderer.clone()),
+                    )
+                    .when(self.show_code, |this| {
+                        let nodes = content.renderer.read(cx).state.read(cx).get_nodes().clone();
+                        this.child(NodeCodeRenderer::new(nodes, window, cx))
+                    }),
+
+                LoadingState::Error(error) => div()
+                    .flex()
+                    .w_full()
+                    .h_full()
+                    .items_center()
+                    .justify_center()
+                    .child(format!("Error: {}", error)),
+            },
+            None => div()
+                .flex()
+                .w_full()
+                .h_full()
+                .items_center()
+                .justify_center()
+                .child("No document selected"),
+        }
     }
 }
 
