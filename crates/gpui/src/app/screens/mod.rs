@@ -37,6 +37,7 @@ impl AppRouter {
 impl Render for AppRouter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let notification_layer = Root::render_notification_layer(window, cx);
+        let dialog_layer = Root::render_dialog_layer(window, cx);
 
         div()
             .w_full()
@@ -57,6 +58,7 @@ impl Render for AppRouter {
                         },
                     ),
             )
+            .children(dialog_layer)
             .children(notification_layer)
     }
 }

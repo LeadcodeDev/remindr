@@ -58,4 +58,14 @@ impl DocumentRepository {
 
         Ok(())
     }
+
+    pub async fn delete_document(&self, id: i32) -> Result<(), Error> {
+        query("DELETE FROM documents WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow::Error::from(e))?;
+
+        Ok(())
+    }
 }

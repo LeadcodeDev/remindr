@@ -14,7 +14,7 @@ use crate::{
         components::node_code_renderer::NodeCodeRenderer,
         states::{
             app_state::AppState,
-            document_state::{DocumentState, OpenedDocument, PersistenceState},
+            document_state::{DocumentContent, DocumentState, OpenedDocument, PersistenceState},
             repository_state::RepositoryState,
         },
     },
@@ -90,7 +90,6 @@ impl DocumentScreen {
 
 impl Render for DocumentScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Trigger loading if needed
         self.load_document_if_needed(window, cx);
 
         let (documents, current_document, current_index, is_saving, can_go_previous, can_go_next) =
@@ -242,7 +241,7 @@ impl Render for DocumentScreen {
                                 )
                         })),
                 )
-                .child(self.render_document_content(current_document, window, cx))
+                .child(self.render_document_content(current_document))
             })
             .when(documents.is_empty(), |this| this.child(DocumentStateEmpty))
     }
@@ -252,53 +251,90 @@ impl DocumentScreen {
     fn render_document_content(
         &self,
         current_document: Option<OpenedDocument>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         match current_document {
             Some(doc) => match &doc.state {
-                LoadingState::Loading => div()
-                    .flex()
-                    .w_full()
-                    .h_full()
-                    .items_center()
-                    .justify_center()
-                    .child("Loading..."),
+                LoadingState::Loading => DocumentLoading.into_any_element(),
 
-                LoadingState::Loaded(content) => div()
-                    .flex()
-                    .gap_10()
-                    .h_full()
-                    .w_full()
-                    .child(
-                        div()
-                            .max_w(px(820.0))
-                            .w_full()
-                            .mx_auto()
-                            .py_5()
-                            .child(content.renderer.clone()),
-                    )
-                    .when(self.show_code, |this| {
-                        let nodes = content.renderer.read(cx).state.read(cx).get_nodes().clone();
-                        this.child(NodeCodeRenderer::new(nodes, window, cx))
-                    }),
+                LoadingState::Loaded(content) => DocumentStateLoaded {
+                    content: content.clone(),
+                    show_code: self.show_code,
+                }
+                .into_any_element(),
 
-                LoadingState::Error(error) => div()
-                    .flex()
-                    .w_full()
-                    .h_full()
-                    .items_center()
-                    .justify_center()
-                    .child(format!("Error: {}", error)),
+                LoadingState::Error(error) => DocumentLoadingError {
+                    error: error.to_string(),
+                }
+                .into_any_element(),
             },
-            None => div()
-                .flex()
-                .w_full()
-                .h_full()
-                .items_center()
-                .justify_center()
-                .child("No document selected"),
+            None => DocumentStateEmpty.into_any_element(),
         }
+    }
+}
+
+#[derive(IntoElement)]
+struct DocumentLoading;
+impl RenderOnce for DocumentLoading {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .flex()
+            .w_full()
+            .h_full()
+            .items_center()
+            .justify_center()
+            .child("Loading...")
+    }
+}
+
+#[derive(IntoElement)]
+struct DocumentLoadingError {
+    error: String,
+}
+
+impl RenderOnce for DocumentLoadingError {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .flex()
+            .w_full()
+            .h_full()
+            .items_center()
+            .justify_center()
+            .child(self.error)
+    }
+}
+
+#[derive(IntoElement)]
+struct DocumentStateLoaded {
+    content: DocumentContent,
+    show_code: bool,
+}
+
+impl RenderOnce for DocumentStateLoaded {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        div()
+            .flex()
+            .gap_10()
+            .h_full()
+            .w_full()
+            .child(
+                div()
+                    .max_w(px(820.0))
+                    .w_full()
+                    .mx_auto()
+                    .py_5()
+                    .child(self.content.renderer.clone()),
+            )
+            .when(self.show_code, |this| {
+                let nodes = self
+                    .content
+                    .renderer
+                    .read(cx)
+                    .state
+                    .read(cx)
+                    .get_nodes()
+                    .clone();
+                this.child(NodeCodeRenderer::new(nodes, window, cx))
+            })
     }
 }
 
