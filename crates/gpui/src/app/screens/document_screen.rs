@@ -1,6 +1,6 @@
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
-    ActiveTheme, Icon, Sizable, WindowExt,
+    Disableable, Icon, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     notification::{Notification, NotificationType},
     tab::{Tab, TabBar},
@@ -92,20 +92,32 @@ impl Render for DocumentScreen {
         // Trigger loading if needed
         self.load_document_if_needed(window, cx);
 
-        let (documents, current_document, current_index, pending_notification) = cx
-            .read_global::<DocumentState, _>(|state, _| {
-                let documents: Vec<OpenedDocument> = state.documents.clone();
-                let current_document = state.get_current_document().cloned();
-                let current_index = state.get_current_document_index();
-                let pending_notification = state.pending_notification;
+        let (
+            documents,
+            current_document,
+            current_index,
+            pending_notification,
+            can_go_previous,
+            can_go_next,
+        ) = cx.read_global::<DocumentState, _>(|state, _| {
+            let documents: Vec<OpenedDocument> = state.documents.clone();
+            let current_document = state.get_current_document().cloned();
+            let current_index = state.get_current_document_index();
+            let pending_notification = state.pending_notification;
+            let can_go_previous = current_index.map(|i| i > 0).unwrap_or(false);
+            let can_go_next = current_index
+                .map(|i| i < documents.len().saturating_sub(1))
+                .unwrap_or(false);
 
-                (
-                    documents,
-                    current_document,
-                    current_index,
-                    pending_notification,
-                )
-            });
+            (
+                documents,
+                current_document,
+                current_index,
+                pending_notification,
+                can_go_previous,
+                can_go_next,
+            )
+        });
 
         if pending_notification {
             window.push_notification(
@@ -127,6 +139,74 @@ impl Render for DocumentScreen {
             .when(!documents.is_empty(), |this| {
                 this.child(
                     TabBar::new("tabs")
+                        .prefix(
+                            div()
+                                .px_1()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    Button::new("nav-previous")
+                                        .xsmall()
+                                        .ghost()
+                                        .when(can_go_previous, |this| this.cursor_pointer())
+                                        .icon(Icon::default().path("icons/chevron-left.svg"))
+                                        .disabled(!can_go_previous)
+                                        .tooltip("Previous tab")
+                                        .on_click(cx.listener(|_, _, _, cx| {
+                                            cx.update_global::<DocumentState, _>(|state, _| {
+                                                if let Some(index) =
+                                                    state.get_current_document_index()
+                                                {
+                                                    if index > 0 {
+                                                        if let Some(doc) =
+                                                            state.documents.get(index - 1)
+                                                        {
+                                                            state.current_opened_document =
+                                                                Some(doc.uid);
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        })),
+                                )
+                                .child(
+                                    Button::new("nav-next")
+                                        .xsmall()
+                                        .ghost()
+                                        .when(can_go_next, |this| this.cursor_pointer())
+                                        .icon(Icon::default().path("icons/chevron-right.svg"))
+                                        .disabled(!can_go_next)
+                                        .tooltip("Next tab")
+                                        .on_click(cx.listener(|_, _, _, cx| {
+                                            cx.update_global::<DocumentState, _>(|state, _| {
+                                                let current_index =
+                                                    state.get_current_document_index();
+
+                                                if let Some(index) = current_index {
+                                                    if index < state.documents.len() - 1 {
+                                                        let document =
+                                                            state.documents.get(index + 1);
+                                                        if let Some(doc) = document {
+                                                            state.current_opened_document =
+                                                                Some(doc.uid);
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        })),
+                                ),
+                        )
+                        .suffix(
+                            div().px_4().flex().items_center().child(
+                                Button::new("toggle-code-btn")
+                                    .xsmall()
+                                    .ghost()
+                                    .cursor_pointer()
+                                    .icon(Icon::default().path("icons/braces.svg"))
+                                    .tooltip("Toggle code view")
+                                    .on_click(cx.listener(Self::toggle_code_mode)),
+                            ),
+                        )
                         .selected_index(current_index.unwrap_or(0))
                         .on_click(cx.listener(|_, index: &usize, _, cx| {
                             cx.update_global::<DocumentState, _>(|state, _| {
@@ -136,49 +216,33 @@ impl Render for DocumentScreen {
                             });
                         }))
                         .children(documents.iter().map(|element| {
-                            Tab::new().label(element.title.clone()).suffix(
-                                Button::new("btn")
-                                    .xsmall()
-                                    .mr_2()
-                                    .icon(Icon::default().path("icons/x.svg"))
-                                    .ghost()
-                                    .tooltip("Close tab")
-                                    .on_click({
-                                        let element_id = element.uid;
-                                        cx.listener(move |_, _, _, cx| {
-                                            cx.update_global::<DocumentState, _>(|state, _| {
-                                                let previous_document =
-                                                    state.get_previous_document(element_id);
+                            Tab::new()
+                                .cursor_pointer()
+                                .label(element.title.clone())
+                                .suffix(
+                                    Button::new("btn")
+                                        .xsmall()
+                                        .mr_2()
+                                        .cursor_pointer()
+                                        .icon(Icon::default().path("icons/x.svg"))
+                                        .ghost()
+                                        .tooltip("Close tab")
+                                        .on_click({
+                                            let element_id = element.uid;
+                                            cx.listener(move |_, _, _, cx| {
+                                                cx.update_global::<DocumentState, _>(|state, _| {
+                                                    let previous_document =
+                                                        state.get_previous_document(element_id);
 
-                                                state.current_opened_document =
-                                                    previous_document.map(|doc| doc.uid);
+                                                    state.current_opened_document =
+                                                        previous_document.map(|doc| doc.uid);
 
-                                                state.remove_document(element_id);
+                                                    state.remove_document(element_id);
+                                                })
                                             })
-                                        })
-                                    }),
-                            )
+                                        }),
+                                )
                         })),
-                )
-                .child(
-                    div()
-                        .border_b_1()
-                        .border_color(cx.theme().border)
-                        .h_8()
-                        .flex()
-                        .justify_between()
-                        .items_center()
-                        .px_3()
-                        .child("")
-                        .child(
-                            div().child(
-                                Button::new("btn")
-                                    .xsmall()
-                                    .compact()
-                                    .icon(Icon::default().path("icons/braces.svg"))
-                                    .on_click(cx.listener(Self::toggle_code_mode)),
-                            ),
-                        ),
                 )
                 .child(self.render_document_content(current_document, window, cx))
             })
