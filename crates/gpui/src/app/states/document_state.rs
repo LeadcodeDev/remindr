@@ -243,6 +243,7 @@ impl DocumentState {
                             if last <= trigger_time {
                                 // Debounce expired, start saving
                                 state.persistence = PersistenceState::Pending;
+                                cx.refresh_windows();
 
                                 let nodes = {
                                     let nodes = renderer.read(cx).state.clone();
@@ -266,8 +267,9 @@ impl DocumentState {
                                     sleep(Duration::from_secs(1)).await;
 
                                     // Mark as idle when save completes
-                                    let _ = cx.update_global::<DocumentState, _>(|state, _| {
+                                    let _ = cx.update_global::<DocumentState, _>(|state, cx| {
                                         state.persistence = PersistenceState::Idle;
+                                        cx.refresh_windows();
                                     });
 
                                     result

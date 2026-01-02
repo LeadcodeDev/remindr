@@ -391,7 +391,9 @@ impl RichTextState {
                 last_space_idx = idx;
             }
 
-            let text_since_line_start = &self.content[current_line_start..=idx];
+            // Use the byte index AFTER the current character (idx + char byte length)
+            let char_end = idx + ch.len_utf8();
+            let text_since_line_start = &self.content[current_line_start..char_end];
             let width = window
                 .text_system()
                 .shape_line(
@@ -1167,20 +1169,12 @@ impl RichTextState {
 
     fn handle_key_down(
         &mut self,
-        event: &KeyDownEvent,
+        _event: &KeyDownEvent,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
-        // Handle character input
-        if let Some(input) = &event.keystroke.key_char {
-            // Don't handle if it's a control character or handled by actions
-            if !event.keystroke.modifiers.platform
-                && !event.keystroke.modifiers.control
-                && !input.is_empty()
-            {
-                self.insert_text(input, cx);
-            }
-        }
+        // Character input is now handled by EntityInputHandler via replace_text_in_range
+        // This method is kept for potential future use with special key handling
     }
 }
 
@@ -1297,6 +1291,7 @@ impl EntityInputHandler for RichTextState {
         let new_cursor = range.start + new_text.len();
         self.selection = Selection::cursor(new_cursor);
         self.marked_range = None;
+        cx.emit(RichTextEvent::Change(self.content.clone().into()));
         cx.notify();
     }
 
@@ -1334,6 +1329,7 @@ impl EntityInputHandler for RichTextState {
             });
         self.selection = Selection::new(new_cursor.start, new_cursor.end);
 
+        cx.emit(RichTextEvent::Change(self.content.clone().into()));
         cx.notify();
     }
 
@@ -1772,7 +1768,9 @@ impl RenderOnce for RichTextView {
                                 last_space_idx = idx;
                             }
 
-                            let text_since_line_start = &content[current_line_start..=idx];
+                            // Use the byte index AFTER the current character
+                            let char_end = idx + ch.len_utf8();
+                            let text_since_line_start = &content[current_line_start..char_end];
                             let width = window
                                 .text_system()
                                 .shape_line(
