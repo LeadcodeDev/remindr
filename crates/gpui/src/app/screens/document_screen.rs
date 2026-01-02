@@ -60,18 +60,19 @@ impl DocumentScreen {
     }
 
     fn load_document_if_needed(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let needs_loading = cx.read_global::<DocumentState, _>(|state, _| {
-            state
-                .current_opened_document
-                .map(|id| state.needs_loading(id))
-                .unwrap_or(false)
+        let (needs_loading, document_id) = cx.read_global::<DocumentState, _>(|state, _| {
+            let id = state.current_opened_document;
+            let needs = id.map(|id| state.needs_loading(id)).unwrap_or(false);
+            (needs, id)
         });
 
         if needs_loading {
-            let document_id =
-                cx.read_global::<DocumentState, _>(|state, _| state.current_opened_document);
-
             if let Some(doc_id) = document_id {
+                // Mark as loading in progress to prevent duplicate loads
+                cx.update_global::<DocumentState, _>(|state, _| {
+                    state.set_loading_in_progress(doc_id, true);
+                });
+
                 let repository = cx.global::<RepositoryState>().documents.clone();
                 let window_handle = window.window_handle();
 
@@ -80,15 +81,30 @@ impl DocumentScreen {
 
                     match result {
                         Ok(document) => {
-                            let _ = cx.update_window(window_handle, |_, window, cx| {
+                            let update_result = cx.update_window(window_handle, |_, window, cx| {
                                 cx.update_global::<DocumentState, _>(|state, cx| {
                                     state.set_document_content(doc_id, document, window, cx);
+                                    state.set_loading_in_progress(doc_id, false);
                                 });
                             });
+
+                            // If window update failed, try to update via cx.update
+                            if update_result.is_err() {
+                                let _ = cx.update(|cx| {
+                                    cx.update_global::<DocumentState, _>(|state, _| {
+                                        state.set_loading_in_progress(doc_id, false);
+                                        state.set_document_error(
+                                            doc_id,
+                                            "Failed to update window".to_string(),
+                                        );
+                                    });
+                                });
+                            }
                         }
                         Err(e) => {
                             let _ = cx.update(|cx| {
                                 cx.update_global::<DocumentState, _>(|state, _| {
+                                    state.set_loading_in_progress(doc_id, false);
                                     state.set_document_error(doc_id, e.to_string());
                                 });
                             });

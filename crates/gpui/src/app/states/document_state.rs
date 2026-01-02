@@ -84,6 +84,8 @@ pub struct OpenedDocument {
     pub uid: i32,
     pub title: String,
     pub state: LoadingState<DocumentContent>,
+    /// Indicates if a loading task is currently in progress
+    pub loading_in_progress: bool,
 }
 
 #[derive(Clone)]
@@ -140,6 +142,7 @@ impl DocumentState {
                 uid: id,
                 title,
                 state: LoadingState::Loading,
+                loading_in_progress: false,
             });
         }
         self.current_opened_document = Some(id);
@@ -193,13 +196,20 @@ impl DocumentState {
         }
     }
 
-    /// Check if a document needs loading
+    /// Check if a document needs loading (is in Loading state and no loading task is in progress)
     pub fn needs_loading(&self, uid: i32) -> bool {
         self.documents
             .iter()
             .find(|d| d.uid == uid)
-            .map(|d| matches!(d.state, LoadingState::Loading))
+            .map(|d| matches!(d.state, LoadingState::Loading) && !d.loading_in_progress)
             .unwrap_or(false)
+    }
+
+    /// Mark a document as having a loading task in progress
+    pub fn set_loading_in_progress(&mut self, uid: i32, in_progress: bool) {
+        if let Some(doc) = self.documents.iter_mut().find(|d| d.uid == uid) {
+            doc.loading_in_progress = in_progress;
+        }
     }
 
     pub fn remove_document(&mut self, uid: i32) {

@@ -101,53 +101,85 @@ impl Render for AppSidebar {
             .items_center()
             .child("Documents")
             .child(
-                h_flex().gap_1().child(
-                    Button::new("create-document")
-                        .icon(Icon::default().path("icons/plus.svg"))
-                        .ghost()
-                        .xsmall()
-                        .cursor_pointer()
-                        .tooltip("New document")
-                        .on_click({
-                            let this = this.clone();
-                            let app_state = app_state.clone();
-                            move |_, _, cx| {
-                                let repository = cx.global::<RepositoryState>().documents.clone();
-                                let this_clone = this.clone();
-                                let app_state = app_state.clone();
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("refresh-documents")
+                            .icon(Icon::default().path("icons/refresh-cw.svg"))
+                            .ghost()
+                            .xsmall()
+                            .cursor_pointer()
+                            .tooltip("Refresh documents")
+                            .on_click({
+                                let this = this.clone();
+                                move |_, _, cx| {
+                                    let repository =
+                                        cx.global::<RepositoryState>().documents.clone();
+                                    let this_clone = this.clone();
 
-                                cx.spawn(async move |cx| {
-                                    let new_document = DocumentModel {
-                                        id: 0,
-                                        title: "Untitled".to_string(),
-                                        content: serde_json::json!([]),
-                                    };
+                                    cx.spawn(async move |cx| {
+                                        let documents = repository.get_documents().await?;
 
-                                    let new_id = repository.insert_document(new_document).await?;
-                                    let documents = repository.get_documents().await?;
-
-                                    let _ = cx.update(|cx: &mut App| {
                                         let _ = this_clone.update(cx, |state, _| {
                                             state.document_state = LoadingState::Loaded(documents);
                                         });
 
-                                        cx.update_global::<DocumentState, _>(|state, _| {
-                                            state.open_document(new_id, "Untitled".to_string());
+                                        Ok::<_, anyhow::Error>(())
+                                    })
+                                    .detach();
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("create-document")
+                            .icon(Icon::default().path("icons/plus.svg"))
+                            .ghost()
+                            .xsmall()
+                            .cursor_pointer()
+                            .tooltip("New document")
+                            .on_click({
+                                let this = this.clone();
+                                let app_state = app_state.clone();
+                                move |_, _, cx| {
+                                    let repository =
+                                        cx.global::<RepositoryState>().documents.clone();
+                                    let this_clone = this.clone();
+                                    let app_state = app_state.clone();
+
+                                    cx.spawn(async move |cx| {
+                                        let new_document = DocumentModel {
+                                            id: 0,
+                                            title: "Untitled".to_string(),
+                                            content: serde_json::json!([]),
+                                        };
+
+                                        let new_id =
+                                            repository.insert_document(new_document).await?;
+                                        let documents = repository.get_documents().await?;
+
+                                        let _ = cx.update(|cx: &mut App| {
+                                            let _ = this_clone.update(cx, |state, _| {
+                                                state.document_state =
+                                                    LoadingState::Loaded(documents);
+                                            });
+
+                                            cx.update_global::<DocumentState, _>(|state, _| {
+                                                state.open_document(new_id, "Untitled".to_string());
+                                            });
+
+                                            app_state.update(cx, |app_state, cx| {
+                                                let document_screen =
+                                                    DocumentScreen::new(cx.weak_entity());
+                                                app_state.navigator.push(document_screen, cx);
+                                            });
                                         });
 
-                                        app_state.update(cx, |app_state, cx| {
-                                            let document_screen =
-                                                DocumentScreen::new(cx.weak_entity());
-                                            app_state.navigator.push(document_screen, cx);
-                                        });
-                                    });
-
-                                    Ok::<_, anyhow::Error>(())
-                                })
-                                .detach();
-                            }
-                        }),
-                ),
+                                        Ok::<_, anyhow::Error>(())
+                                    })
+                                    .detach();
+                                }
+                            }),
+                    ),
             );
 
         // Document items
