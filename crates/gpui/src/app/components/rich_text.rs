@@ -5,8 +5,8 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
     InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Refineable, RenderOnce,
-    SharedString, StrikethroughStyle, StyleRefinement, Styled, StyledText, Task, Timer,
-    UTF16Selection, UnderlineStyle, Window, actions, canvas, div, prelude::FluentBuilder, px,
+    SharedString, StrikethroughStyle, StyleRefinement, Styled, Task, Timer, UTF16Selection,
+    UnderlineStyle, Window, actions, canvas, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, menu::ContextMenuExt};
 use serde::{Deserialize, Serialize};
@@ -311,6 +311,7 @@ pub struct RichTextState {
     history: Vec<(String, Vec<TextSpan>, Selection)>,
     history_index: usize,
     marked_range: Option<Range<usize>>,
+    wrapped_line_count: usize,
 }
 
 impl EventEmitter<RichTextEvent> for RichTextState {}
@@ -331,6 +332,7 @@ impl RichTextState {
             is_selecting: false,
             last_bounds: None,
             history: vec![(String::new(), Vec::new(), Selection::default())],
+            wrapped_line_count: 1,
             history_index: 0,
             marked_range: None,
         }
@@ -354,12 +356,27 @@ impl RichTextState {
         self.is_selecting
     }
 
-    pub fn set_bounds(&mut self, bounds: Bounds<Pixels>) {
+    pub fn set_bounds(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let width_changed = self
+            .last_bounds
+            .map(|b| b.size.width != bounds.size.width)
+            .unwrap_or(true);
         self.last_bounds = Some(bounds);
+        if width_changed {
+            cx.notify();
+        }
     }
 
     pub fn last_bounds(&self) -> Option<Bounds<Pixels>> {
         self.last_bounds
+    }
+
+    pub fn set_wrapped_line_count(&mut self, count: usize) {
+        self.wrapped_line_count = count.max(1);
+    }
+
+    pub fn wrapped_line_count(&self) -> usize {
+        self.wrapped_line_count
     }
 
     /// Calculate cursor position from mouse point (x, y) with wrap support
@@ -387,8 +404,9 @@ impl RichTextState {
         // Find word boundaries and calculate where lines wrap
         let mut last_space_idx = 0;
         for (idx, ch) in self.content.char_indices() {
+            // Store the byte index AFTER the space character
             if ch.is_whitespace() {
-                last_space_idx = idx;
+                last_space_idx = idx + ch.len_utf8();
             }
 
             // Use the byte index AFTER the current character (idx + char byte length)
@@ -407,7 +425,7 @@ impl RichTextState {
             if width > wrap_width && idx > current_line_start {
                 // Wrap at the last space if possible, otherwise at current position
                 let wrap_at = if last_space_idx > current_line_start {
-                    last_space_idx + 1 // Wrap after the space
+                    last_space_idx // Already points after the space
                 } else {
                     idx
                 };
@@ -1384,91 +1402,14 @@ impl RenderOnce for RichTextView {
         let focus_handle = self.state.read(cx).focus_handle.clone();
         let is_focused = focus_handle.is_focused(window);
         let cursor_visible = self.state.read(cx).cursor_visible();
-        let has_selection = !selection.is_empty();
 
         let text_style = window.text_style();
         let theme = cx.theme();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
 
-        // Calculate cursor position accounting for text wrapping
+        // Cursor position for IME/input handling
         let cursor_pos = selection.head().min(content.len());
         let line_height = font_size * 1.5;
-
-        // Get wrap width from state bounds
-        let wrap_width = self
-            .state
-            .read(cx)
-            .last_bounds()
-            .map(|b| b.size.width)
-            .unwrap_or(px(1000.0));
-
-        // Calculate wrap boundaries for cursor positioning
-        let mut cursor_wrap_boundaries: Vec<usize> = Vec::new();
-        let mut cursor_line_start = 0;
-        let mut cursor_last_space_idx = 0;
-
-        for (idx, ch) in content.char_indices() {
-            if ch.is_whitespace() {
-                cursor_last_space_idx = idx;
-            }
-
-            // Use the byte index AFTER the current character (idx + char byte length)
-            let char_end = idx + ch.len_utf8();
-            let text_since_line_start = &content[cursor_line_start..char_end];
-            let width = window
-                .text_system()
-                .shape_line(
-                    SharedString::from(text_since_line_start.to_string()),
-                    font_size,
-                    &[text_style.to_run(text_since_line_start.len())],
-                    None,
-                )
-                .width;
-
-            if width > wrap_width && idx > cursor_line_start {
-                let wrap_at = if cursor_last_space_idx > cursor_line_start {
-                    cursor_last_space_idx + 1
-                } else {
-                    idx
-                };
-                cursor_wrap_boundaries.push(wrap_at);
-                cursor_line_start = wrap_at;
-                cursor_last_space_idx = wrap_at;
-            }
-        }
-
-        // Find which line the cursor is on and its position within that line
-        let (cursor_line_idx, cursor_line_start_byte) = {
-            let mut line_idx = 0;
-            let mut line_start = 0;
-
-            for &wrap_at in &cursor_wrap_boundaries {
-                if cursor_pos < wrap_at {
-                    break;
-                }
-                line_idx += 1;
-                line_start = wrap_at;
-            }
-
-            (line_idx, line_start)
-        };
-
-        let cursor_x = if cursor_pos > cursor_line_start_byte {
-            let text_in_line = &content[cursor_line_start_byte..cursor_pos];
-            window
-                .text_system()
-                .shape_line(
-                    SharedString::from(text_in_line.to_string()),
-                    font_size,
-                    &[text_style.to_run(text_in_line.len())],
-                    None,
-                )
-                .width
-        } else {
-            px(0.0)
-        };
-
-        let cursor_y = line_height * (cursor_line_idx as f32);
 
         let state = self.state.clone();
         let style = self.style;
@@ -1697,198 +1638,193 @@ impl RenderOnce for RichTextView {
                     });
                 }
             })
-            .min_h(font_size * 1.5)
             .w_full()
             .cursor_text()
+            .min_h(line_height)
+            .relative()
+            // Selection and cursor overlay (absolute positioned, painted first as background)
             .child({
                 let state_for_bounds = state.clone();
-                let state_for_input = state.clone();
+                let state_for_overlay = state.clone();
+                let selection_for_overlay = selection;
+                let cursor_pos_for_overlay = cursor_pos;
+                let is_focused_for_overlay = is_focused;
+                let cursor_visible_for_overlay = cursor_visible;
+                let theme_selection = theme.selection;
+                let theme_foreground = theme.foreground;
+
                 canvas(
                     move |bounds, _window, cx| {
-                        state_for_bounds.update(cx, |s, _cx| {
-                            s.set_bounds(bounds);
+                        state_for_bounds.update(cx, |s, cx| {
+                            s.set_bounds(bounds, cx);
                         });
                     },
                     move |bounds, _, window, cx| {
-                        // Register input handler for IME/emoji picker support (must be called during paint)
-                        window.handle_input(
-                            &state_for_input.read(cx).focus_handle,
-                            ElementInputHandler::new(bounds, state_for_input.clone()),
-                            cx,
-                        );
-                    },
-                )
-                .size_full()
-                .absolute()
-            })
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .child({
+                        let text_style = window.text_style();
+                        let font_size = text_style.font_size.to_pixels(window.rem_size());
+                        let line_height = font_size * 1.5;
+
+                        // Paint selection and cursor using shape_text for accurate positioning
+                        let wrap_width = bounds.size.width;
+                        let content = state_for_overlay.read(cx).content().to_string();
                         let display_content = if content.is_empty() {
                             " ".to_string()
                         } else {
-                            content.clone()
+                            content
                         };
-                        StyledText::new(display_content).with_highlights(highlights.into_iter())
-                    })
-                    .when(
-                        is_focused && cursor_visible && selection.is_empty(),
-                        |this| {
-                            this.child(
-                                div()
-                                    .absolute()
-                                    .left(cursor_x)
-                                    .top(cursor_y)
-                                    .w(px(2.0))
-                                    .h(line_height)
-                                    .bg(theme.foreground),
-                            )
-                        },
-                    )
-                    .when(is_focused && !selection.is_empty(), |this| {
-                        let (sel_start, sel_end) = selection.normalized();
-                        let line_height = font_size * 1.5;
 
-                        // Get wrap width from state bounds
-                        let wrap_width = state
-                            .read(cx)
-                            .last_bounds()
-                            .map(|b| b.size.width)
-                            .unwrap_or(px(1000.0));
+                        // Use shape_text with wrap to get accurate positions
+                        let wrapped = window.text_system().shape_text(
+                            SharedString::from(display_content.clone()),
+                            font_size,
+                            &[text_style.to_run(display_content.len())],
+                            Some(wrap_width),
+                            None,
+                        );
 
-                        // Calculate wrap boundaries
-                        let mut wrap_boundaries: Vec<usize> = Vec::new();
-                        let mut current_line_start = 0;
-                        let mut last_space_idx = 0;
+                        if let Ok(wrapped) = wrapped {
+                            // Paint selection
+                            if is_focused_for_overlay && !selection_for_overlay.is_empty() {
+                                let (sel_start, sel_end) = selection_for_overlay.normalized();
 
-                        for (idx, ch) in content.char_indices() {
-                            if ch.is_whitespace() {
-                                last_space_idx = idx;
+                                for line in wrapped.iter() {
+                                    if let Some(start_pos) =
+                                        line.position_for_index(sel_start, line_height)
+                                    {
+                                        if let Some(end_pos) =
+                                            line.position_for_index(sel_end, line_height)
+                                        {
+                                            // Same line selection
+                                            if (start_pos.y - end_pos.y).abs() < px(1.0) {
+                                                let width = end_pos.x - start_pos.x;
+                                                if width > px(0.0) {
+                                                    let rect = gpui::Bounds::new(
+                                                        gpui::point(
+                                                            bounds.left() + start_pos.x,
+                                                            bounds.top() + start_pos.y,
+                                                        ),
+                                                        gpui::size(width, line_height),
+                                                    );
+                                                    window.paint_quad(gpui::fill(
+                                                        rect,
+                                                        theme_selection,
+                                                    ));
+                                                }
+                                            } else {
+                                                // Multi-line selection
+                                                let start_line =
+                                                    (start_pos.y / line_height).floor() as i32;
+                                                let end_line =
+                                                    (end_pos.y / line_height).floor() as i32;
+
+                                                for line_idx in start_line..=end_line {
+                                                    let y = line_idx as f32 * line_height;
+                                                    let (x_start, x_end) = if line_idx == start_line
+                                                    {
+                                                        (start_pos.x, wrap_width)
+                                                    } else if line_idx == end_line {
+                                                        (px(0.0), end_pos.x)
+                                                    } else {
+                                                        (px(0.0), wrap_width)
+                                                    };
+
+                                                    let width = x_end - x_start;
+                                                    if width > px(0.0) {
+                                                        let rect = gpui::Bounds::new(
+                                                            gpui::point(
+                                                                bounds.left() + x_start,
+                                                                bounds.top() + y,
+                                                            ),
+                                                            gpui::size(width, line_height),
+                                                        );
+                                                        window.paint_quad(gpui::fill(
+                                                            rect,
+                                                            theme_selection,
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
                             }
 
-                            // Use the byte index AFTER the current character
-                            let char_end = idx + ch.len_utf8();
-                            let text_since_line_start = &content[current_line_start..char_end];
-                            let width = window
-                                .text_system()
-                                .shape_line(
-                                    SharedString::from(text_since_line_start.to_string()),
-                                    font_size,
-                                    &[text_style.to_run(text_since_line_start.len())],
-                                    None,
-                                )
-                                .width;
-
-                            if width > wrap_width && idx > current_line_start {
-                                let wrap_at = if last_space_idx > current_line_start {
-                                    last_space_idx + 1
-                                } else {
-                                    idx
-                                };
-                                wrap_boundaries.push(wrap_at);
-                                current_line_start = wrap_at;
-                                last_space_idx = wrap_at;
-                            }
-                        }
-
-                        // Build line ranges
-                        let mut lines: Vec<(usize, usize)> = Vec::new();
-                        let mut line_start = 0;
-                        for &wrap_at in &wrap_boundaries {
-                            lines.push((line_start, wrap_at));
-                            line_start = wrap_at;
-                        }
-                        lines.push((line_start, content.len()));
-
-                        // Generate selection rectangles for each line
-                        let mut selection_rects: Vec<(Pixels, Pixels, Pixels, Pixels)> = Vec::new(); // (left, top, width, height)
-
-                        for (line_idx, &(line_start_byte, line_end_byte)) in
-                            lines.iter().enumerate()
-                        {
-                            // Check if selection overlaps this line
-                            if sel_end <= line_start_byte || sel_start >= line_end_byte {
-                                continue;
-                            }
-
-                            // Calculate selection bounds within this line
-                            let sel_start_in_line = sel_start.max(line_start_byte);
-                            let sel_end_in_line = sel_end.min(line_end_byte);
-
-                            let line_text = &content[line_start_byte..line_end_byte];
-
-                            // Calculate X positions relative to line start
-                            let start_offset = sel_start_in_line - line_start_byte;
-                            let end_offset = sel_end_in_line - line_start_byte;
-
-                            let start_x = if start_offset > 0 {
-                                let text = &line_text[..start_offset];
-                                window
-                                    .text_system()
-                                    .shape_line(
-                                        SharedString::from(text.to_string()),
-                                        font_size,
-                                        &[text_style.to_run(text.len())],
-                                        None,
-                                    )
-                                    .width
-                            } else {
-                                px(0.0)
-                            };
-
-                            let end_x = if end_offset > 0 {
-                                let text = &line_text[..end_offset];
-                                window
-                                    .text_system()
-                                    .shape_line(
-                                        SharedString::from(text.to_string()),
-                                        font_size,
-                                        &[text_style.to_run(text.len())],
-                                        None,
-                                    )
-                                    .width
-                            } else {
-                                px(0.0)
-                            };
-
-                            let top = line_height * (line_idx as f32);
-                            let width = end_x - start_x;
-
-                            if width > px(0.0) {
-                                selection_rects.push((start_x, top, width, line_height));
+                            // Paint cursor
+                            if is_focused_for_overlay
+                                && cursor_visible_for_overlay
+                                && selection_for_overlay.is_empty()
+                            {
+                                for line in wrapped.iter() {
+                                    if let Some(cursor_pos) =
+                                        line.position_for_index(cursor_pos_for_overlay, line_height)
+                                    {
+                                        let cursor_bounds = gpui::Bounds::new(
+                                            gpui::point(
+                                                bounds.left() + cursor_pos.x,
+                                                bounds.top() + cursor_pos.y,
+                                            ),
+                                            gpui::size(px(2.0), line_height),
+                                        );
+                                        window.paint_quad(gpui::fill(
+                                            cursor_bounds,
+                                            theme_foreground,
+                                        ));
+                                        break;
+                                    }
+                                }
                             }
                         }
-
-                        // Render all selection rectangles
-                        this.children(selection_rects.into_iter().map(
-                            |(left, top, width, height)| {
-                                div()
-                                    .absolute()
-                                    .left(left)
-                                    .top(top)
-                                    .w(width)
-                                    .h(height)
-                                    .bg(theme.selection)
-                            },
-                        ))
-                    }),
-            );
-
-        // Add context menu only when there's a selection
-        if has_selection {
-            base.context_menu(move |menu, _window, _cx| {
-                menu.menu("Bold", Box::new(ToggleBold))
-                    .menu("Italic", Box::new(ToggleItalic))
-                    .menu("Underline", Box::new(ToggleUnderline))
-                    .menu("Strikethrough", Box::new(ToggleStrikethrough))
-                    .menu("Code", Box::new(ToggleCode))
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
             })
-            .into_any_element()
-        } else {
-            base.into_any_element()
-        }
+            // Text content using StyledText (determines the height)
+            .child({
+                let state_for_input = state.clone();
+                let display_content: SharedString = if content.is_empty() {
+                    " ".into()
+                } else {
+                    content.clone().into()
+                };
+
+                div()
+                    .id("rich-text-content")
+                    .w_full()
+                    .child(gpui::StyledText::new(display_content).with_highlights(highlights))
+                    .child(canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            // Register input handler
+                            window.handle_input(
+                                &state_for_input.read(cx).focus_handle,
+                                ElementInputHandler::new(bounds, state_for_input.clone()),
+                                cx,
+                            );
+                        },
+                    ))
+            });
+
+        // Always add context menu - it will show styling options when there's a selection
+        base.context_menu({
+            let state = self.state.clone();
+            move |menu, _window, cx| {
+                let has_sel = !state.read(cx).selection.is_empty();
+                if has_sel {
+                    menu.menu("Bold", Box::new(ToggleBold))
+                        .menu("Italic", Box::new(ToggleItalic))
+                        .menu("Underline", Box::new(ToggleUnderline))
+                        .menu("Strikethrough", Box::new(ToggleStrikethrough))
+                        .menu("Code", Box::new(ToggleCode))
+                } else {
+                    menu
+                }
+            }
+        })
+        .into_any_element()
     }
 }
 

@@ -224,7 +224,7 @@ impl Render for TextNode {
         div()
             .min_w(px(820.0))
             .w_full()
-            .my_3()
+            .my_2()
             .child(RichTextView::new(self.rich_text_state.clone()).ml_3())
             .child(self.menu.clone())
     }
