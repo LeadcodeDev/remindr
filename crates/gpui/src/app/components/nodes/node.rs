@@ -28,5 +28,5 @@ pub struct PartialRemindrNode {
 pub enum RemindrNodeType {
     Text,
     Divider,
-    Title,
+    Heading,
 }

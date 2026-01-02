@@ -131,7 +131,7 @@ impl NodeState {
                 let element = app.new(|cx| TextNode::parse(value, state, window, cx).unwrap());
                 RemindrElement::Text(element)
             }
-            RemindrNodeType::Title => {
+            RemindrNodeType::Heading => {
                 let element = app.new(|cx| HeadingNode::parse(value, state, window, cx).unwrap());
                 RemindrElement::Heading(element)
             }
@@ -158,6 +158,10 @@ impl NodeState {
     pub fn insert_node_after(&mut self, id: Uuid, node: &RemindrNode) {
         let index = self.elements.iter().position(|node| node.id == id).unwrap();
         self.elements.insert(index + 1, node.clone());
+    }
+
+    pub fn insert_node_at(&mut self, index: usize, node: &RemindrNode) {
+        self.elements.insert(index, node.clone());
     }
 
     pub fn get_previous_node(&self, id: Uuid) -> Option<RemindrNode> {

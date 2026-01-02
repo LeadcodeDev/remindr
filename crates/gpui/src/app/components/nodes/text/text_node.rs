@@ -1,7 +1,7 @@
 use std::f32::INFINITY;
 
 use anyhow::{Error, Ok};
-use gpui::{prelude::FluentBuilder, *};
+use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Position};
 use serde_json::{Value, from_value};
 
@@ -82,38 +82,15 @@ impl TextNode {
         let input_state_owned = input_state_value.clone();
         let input_state_str = input_state_owned.as_str();
 
-        let show_menu = if let Some(last_slash_idx) = input_state_str.rfind('/') {
-            let next_char_idx = last_slash_idx + 1;
-            if next_char_idx == input_state_str.len() {
-                true
-            } else {
-                input_state_str
-                    .chars()
-                    .nth(next_char_idx)
-                    .map_or(false, |c| c != ' ')
-            }
-        } else {
-            false
-        };
+        // Check if we should open the slash menu (when "/" is typed)
+        let should_open = input_state_str.ends_with('/') && self.is_focus;
+        let menu_open = self.menu.read(cx).open;
 
-        let should_open = show_menu && self.is_focus;
-        let was_open = self.menu.read(cx).open;
-
-        self.menu.update(cx, |state, cx| {
-            state.open = should_open;
-            let search_query = input_state_str
-                .rfind('/')
-                .map(|idx| SharedString::from(input_state_str[idx + 1..].to_string()))
-                .unwrap_or_default();
-
-            state.search = if show_menu { Some(search_query) } else { None };
-
-            // Focus the menu when it opens
-            if should_open && !was_open {
-                state.focus_handle.focus(window);
-            }
-            cx.notify();
-        });
+        if should_open && !menu_open {
+            self.menu.update(cx, |menu, cx| {
+                menu.set_open(true, window, cx);
+            });
+        }
 
         if self.data.metadata.content.is_empty() && input_state_value.is_empty() {
             self.state.update(cx, |state, cx| {
@@ -151,12 +128,9 @@ impl TextNode {
     }
 
     fn on_press_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // If slash menu is open, confirm selection instead of creating new line
+        // If slash menu is open, don't create new line (menu handles Enter)
         let menu_open = self.menu.read(cx).open;
         if menu_open {
-            self.menu.update(cx, |menu, cx| {
-                menu.confirm_selection(window, cx);
-            });
             return;
         }
 
@@ -167,7 +141,6 @@ impl TextNode {
 
         self.is_focus = false;
         self.show_contextual_menu = false;
-        self.menu.update(cx, |state, _| state.search = None);
 
         self.state.update(cx, |state, cx| {
             state.insert_node_after(
@@ -184,29 +157,6 @@ impl TextNode {
         cx.update_global::<DocumentState, _>(|state, app_cx| {
             state.mark_changed(window, app_cx);
         });
-    }
-
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let menu_open = self.menu.read(cx).open;
-        if !menu_open {
-            return;
-        }
-
-        match event.keystroke.key.as_str() {
-            "up" => {
-                self.menu.update(cx, |menu, cx| {
-                    menu.move_selection_up(cx);
-                });
-                cx.stop_propagation();
-            }
-            "down" => {
-                self.menu.update(cx, |menu, cx| {
-                    menu.move_selection_down(cx);
-                });
-                cx.stop_propagation();
-            }
-            _ => {}
-        }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -227,15 +177,10 @@ impl TextNode {
 }
 
 impl Render for TextNode {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let menu_open = self.menu.read(cx).open;
-
+    fn render(&mut self, _: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .min_w(px(820.0))
             .w_full()
-            .when(menu_open, |this| {
-                this.capture_key_down(cx.listener(Self::on_key_down))
-            })
             .child(
                 Input::new(&self.input_state)
                     .bordered(false)

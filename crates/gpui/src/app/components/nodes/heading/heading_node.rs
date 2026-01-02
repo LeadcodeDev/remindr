@@ -1,7 +1,7 @@
 use std::f32::INFINITY;
 
 use anyhow::{Error, Ok};
-use gpui::{prelude::FluentBuilder, *};
+use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Position};
 use serde_json::{Value, from_value, to_value};
 
@@ -91,43 +91,14 @@ impl HeadingNode {
         let input_state_owned = input_state_value.clone();
         let input_state_str = input_state_owned.as_str();
 
-        let show_menu = if let Some(last_slash_idx) = input_state_str.rfind('/') {
-            let next_char_idx = last_slash_idx + 1;
-            if next_char_idx == input_state_str.len() {
-                true
-            } else {
-                input_state_str
-                    .chars()
-                    .nth(next_char_idx)
-                    .map_or(false, |c| c != ' ')
-            }
-        } else {
-            false
-        };
+        // Check if we should open the slash menu (when "/" is typed)
+        let should_open = input_state_str.ends_with('/') && self.is_focus;
+        let menu_open = self.menu.read(cx).open;
 
-        let should_open = show_menu && self.is_focus;
-        let was_open = self.show_contextual_menu;
-        self.show_contextual_menu = should_open;
-
-        if show_menu {
-            let search_query = input_state_str
-                .rfind('/')
-                .map(|idx| SharedString::from(input_state_str[idx + 1..].to_string()))
-                .unwrap_or_default();
-            self.menu.update(cx, |state, cx| {
-                state.open = should_open;
-                state.search = Some(search_query);
-                // Focus the menu when it opens
-                if should_open && !was_open {
-                    state.focus_handle.focus(window);
-                }
-                cx.notify();
-            });
-        } else {
-            self.menu.update(cx, |state, cx| {
-                state.open = false;
-                state.search = None;
-                cx.notify();
+        if should_open && !menu_open {
+            self.show_contextual_menu = true;
+            self.menu.update(cx, |menu, cx| {
+                menu.set_open(true, window, cx);
             });
         }
 
@@ -171,12 +142,8 @@ impl HeadingNode {
     }
 
     fn on_press_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // If slash menu is open, confirm selection instead of creating new line
+        // If slash menu is open, don't create new line (menu handles Enter)
         if self.show_contextual_menu {
-            self.menu.update(cx, |menu, cx| {
-                menu.confirm_selection(window, cx);
-            });
-            self.show_contextual_menu = false;
             return;
         }
 
@@ -187,7 +154,6 @@ impl HeadingNode {
 
         self.is_focus = false;
         self.show_contextual_menu = false;
-        self.menu.update(cx, |state, _| state.search = None);
 
         self.state.update(cx, |state, cx| {
             let id = Utils::generate_uuid();
@@ -214,28 +180,6 @@ impl HeadingNode {
         });
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.show_contextual_menu {
-            return;
-        }
-
-        match event.keystroke.key.as_str() {
-            "up" => {
-                self.menu.update(cx, |menu, cx| {
-                    menu.move_selection_up(cx);
-                });
-                cx.stop_propagation();
-            }
-            "down" => {
-                self.menu.update(cx, |menu, cx| {
-                    menu.move_selection_down(cx);
-                });
-                cx.stop_propagation();
-            }
-            _ => {}
-        }
-    }
-
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_state.update(cx, |element, cx| {
             element.focus(window, cx);
@@ -254,21 +198,16 @@ impl HeadingNode {
 }
 
 impl Render for HeadingNode {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .min_w(px(820.0))
             .w_full()
-            .when(self.show_contextual_menu, |this| {
-                this.capture_key_down(cx.listener(Self::on_key_down))
-            })
             .child(
                 Input::new(&self.input_state)
                     .bordered(false)
                     .text_3xl()
                     .bg(transparent_white()),
             )
-            .when(self.show_contextual_menu, |this| {
-                this.child(self.menu.clone())
-            })
+            .child(self.menu.clone())
     }
 }

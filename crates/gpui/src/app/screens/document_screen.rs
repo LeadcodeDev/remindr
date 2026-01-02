@@ -25,6 +25,7 @@ use crate::{
 pub struct DocumentScreen {
     _ctx: ScreenContext<AppState>,
     show_code: bool,
+    initialized: bool,
 }
 
 impl Screen for DocumentScreen {
@@ -38,6 +39,18 @@ impl DocumentScreen {
         Self {
             _ctx: ScreenContext::new(app_state),
             show_code: false,
+            initialized: false,
+        }
+    }
+
+    fn ensure_initialized(&mut self, cx: &mut Context<Self>) {
+        if !self.initialized {
+            self.initialized = true;
+            // Observe global DocumentState changes to re-render when document is loaded
+            cx.observe_global::<DocumentState>(|_, cx| {
+                cx.notify();
+            })
+            .detach();
         }
     }
 
@@ -92,6 +105,7 @@ impl DocumentScreen {
 
 impl Render for DocumentScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_initialized(cx);
         self.load_document_if_needed(window, cx);
 
         let (documents, current_document, current_index, is_saving, can_go_previous, can_go_next) =
@@ -258,7 +272,6 @@ impl DocumentScreen {
             Some(doc) => match &doc.state {
                 LoadingState::Loading => DocumentLoading.into_any_element(),
                 LoadingState::Loaded(content) => DocumentStateLoaded {
-                    document_id: doc.uid,
                     content: content.clone(),
                     show_code: self.show_code,
                 }
@@ -306,33 +319,12 @@ impl RenderOnce for DocumentLoadingError {
 
 #[derive(IntoElement)]
 struct DocumentStateLoaded {
-    document_id: i32,
     content: DocumentContent,
     show_code: bool,
 }
 
 impl RenderOnce for DocumentStateLoaded {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let document_id = self.document_id;
-        let title_input = self.content.title_input.clone();
-
-        cx.subscribe(
-            &title_input,
-            move |state, _event: &gpui_component::input::InputEvent, cx| {
-                let new_title = state.read(cx).value().to_string();
-                cx.update_global::<DocumentState, _>(|doc_state, _| {
-                    if let Some(doc) = doc_state
-                        .documents
-                        .iter_mut()
-                        .find(|d| d.uid == document_id)
-                    {
-                        doc.title = new_title;
-                    }
-                });
-            },
-        )
-        .detach();
-
         div().flex().flex_col().h_full().w_full().child(
             div()
                 .flex()

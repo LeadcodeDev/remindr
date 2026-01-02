@@ -1,7 +1,7 @@
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
-    ActiveTheme, Icon, Selectable, StyledExt,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
+    ActiveTheme, Icon, Selectable, Sizable,
+    input::{Input, InputEvent, InputState, MoveDown, MoveUp},
     label::Label,
     popover::Popover,
 };
@@ -16,12 +16,24 @@ use crate::app::{
     states::node_state::NodeState,
 };
 
-const MENU_ITEMS_COUNT: usize = 3;
-
 pub struct SlashMenuDismissEvent {
-    /// If true, the focus should be restored to the original input
-    /// If false, a new element was inserted and has focus
     pub restore_focus: bool,
+}
+
+#[derive(Clone)]
+struct MenuItem {
+    label: &'static str,
+    icon_path: &'static str,
+    shortcut: Option<&'static str>,
+    action: MenuAction,
+}
+
+#[derive(Clone, Copy)]
+enum MenuAction {
+    InsertText,
+    InsertHeading2,
+    InsertHeading3,
+    InsertDivider,
 }
 
 #[derive(Clone)]
@@ -29,39 +41,121 @@ pub struct SlashMenu {
     related_id: Uuid,
     pub state: Entity<NodeState>,
     pub open: bool,
-    pub search: Option<SharedString>,
     pub selected_index: usize,
     pub focus_handle: FocusHandle,
+    search_input: Entity<InputState>,
+    items: Vec<MenuItem>,
 }
 
 impl SlashMenu {
     pub fn new(
         related_id: Uuid,
         state: &Entity<NodeState>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let items = vec![
+            MenuItem {
+                label: "Text",
+                icon_path: "icons/pilcrow.svg",
+                shortcut: None,
+                action: MenuAction::InsertText,
+            },
+            MenuItem {
+                label: "Heading 2",
+                icon_path: "icons/heading-2.svg",
+                shortcut: Some("##"),
+                action: MenuAction::InsertHeading2,
+            },
+            MenuItem {
+                label: "Heading 3",
+                icon_path: "icons/heading-3.svg",
+                shortcut: Some("###"),
+                action: MenuAction::InsertHeading3,
+            },
+            MenuItem {
+                label: "Divider",
+                icon_path: "icons/separator-horizontal.svg",
+                shortcut: Some("---"),
+                action: MenuAction::InsertDivider,
+            },
+        ];
+
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search blocks..."));
+
+        cx.subscribe_in(
+            &search_input,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if let InputEvent::Change = event {
+                    this.selected_index = 0;
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+
         Self {
             related_id,
             state: state.clone(),
             open: false,
-            search: None,
             selected_index: 0,
             focus_handle: cx.focus_handle(),
+            search_input,
+            items,
         }
     }
 
+    pub fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.open = open;
+        if open {
+            self.search_input.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.focus(window, cx);
+            });
+            self.selected_index = 0;
+        }
+        cx.notify();
+    }
+
+    fn filtered_items(&self, cx: &App) -> Vec<(usize, MenuItem)> {
+        let search = self.search_input.read(cx).value();
+        let search = search.to_lowercase();
+
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                if search.is_empty() {
+                    return true;
+                }
+                item.label.to_lowercase().contains(search.as_str())
+            })
+            .map(|(i, item)| (i, item.clone()))
+            .collect()
+    }
+
     pub fn move_selection_up(&mut self, cx: &mut Context<Self>) {
+        let filtered = self.filtered_items(cx);
+        if filtered.is_empty() {
+            return;
+        }
+
         if self.selected_index > 0 {
             self.selected_index -= 1;
         } else {
-            self.selected_index = MENU_ITEMS_COUNT - 1;
+            self.selected_index = filtered.len() - 1;
         }
         cx.notify();
     }
 
     pub fn move_selection_down(&mut self, cx: &mut Context<Self>) {
-        if self.selected_index < MENU_ITEMS_COUNT - 1 {
+        let filtered = self.filtered_items(cx);
+        if filtered.is_empty() {
+            return;
+        }
+
+        if self.selected_index < filtered.len() - 1 {
             self.selected_index += 1;
         } else {
             self.selected_index = 0;
@@ -70,50 +164,160 @@ impl SlashMenu {
     }
 
     pub fn confirm_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.selected_index {
-            0 => Self::on_insert_paragraph(self, &ClickEvent::default(), window, cx),
-            1 => Self::on_insert_heading(self, &ClickEvent::default(), window, cx),
-            2 => Self::on_insert_divider(self, &ClickEvent::default(), window, cx),
-            _ => {}
+        let filtered = self.filtered_items(cx);
+        if let Some((_, item)) = filtered.get(self.selected_index) {
+            match item.action {
+                MenuAction::InsertText => self.insert_text(window, cx),
+                MenuAction::InsertHeading2 => self.insert_heading(2, window, cx),
+                MenuAction::InsertHeading3 => self.insert_heading(3, window, cx),
+                MenuAction::InsertDivider => self.insert_divider(window, cx),
+            }
         }
         self.selected_index = 0;
     }
 
-    pub fn reset_selection(&mut self) {
-        self.selected_index = 0;
+    fn render_section_label(
+        &self,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div().px_2().py_1().child(
+            Label::new(label)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground),
+        )
     }
 
     fn render_item(
         &self,
-        index: usize,
-        label: &'static str,
-        icon: Icon,
-        on_click: impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) + 'static,
+        visual_index: usize,
+        item: &MenuItem,
         cx: &mut Context<Self>,
-    ) -> Button {
-        let is_selected = self.selected_index == index;
+    ) -> impl IntoElement {
+        let is_selected = self.selected_index == visual_index;
         let bg_color = if is_selected {
-            cx.theme().primary.opacity(0.15)
+            cx.theme().accent
         } else {
             cx.theme().transparent
         };
 
-        let custom = ButtonCustomVariant::new(cx)
-            .hover(cx.theme().primary.opacity(0.1))
-            .active(cx.theme().secondary);
+        let text_color = if is_selected {
+            cx.theme().accent_foreground
+        } else {
+            cx.theme().foreground
+        };
 
-        Button::new(label)
-            .custom(custom)
-            .justify_start()
+        let action = item.action;
+        let shortcut = item.shortcut;
+
+        div()
+            .id(SharedString::from(format!("menu-item-{}", visual_index)))
+            .flex()
             .items_center()
-            .py_3()
-            .px_1()
+            .justify_between()
+            .w_full()
+            .px_2()
+            .py_0p5()
+            .rounded_md()
             .cursor_pointer()
-            .gap_2()
             .bg(bg_color)
-            .child(icon)
-            .child(SharedString::new(label))
-            .on_click(cx.listener(on_click))
+            .hover(|this| {
+                if !is_selected {
+                    this.bg(cx.theme().accent.opacity(0.5))
+                } else {
+                    this
+                }
+            })
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(move |this, _, window, cx| match action {
+                MenuAction::InsertText => this.insert_text(window, cx),
+                MenuAction::InsertHeading2 => this.insert_heading(2, window, cx),
+                MenuAction::InsertHeading3 => this.insert_heading(3, window, cx),
+                MenuAction::InsertDivider => this.insert_divider(window, cx),
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Icon::default()
+                            .path(item.icon_path)
+                            .size_4()
+                            .text_color(text_color),
+                    )
+                    .child(Label::new(item.label).text_sm().text_color(text_color)),
+            )
+            .when_some(shortcut, |this, shortcut| {
+                this.child(
+                    Label::new(shortcut)
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground),
+                )
+            })
+    }
+
+    fn render_search_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().w_full().py_0p5().child(
+            Input::new(&self.search_input).appearance(false).prefix(
+                Icon::default()
+                    .path("icons/search.svg")
+                    .small()
+                    .text_color(cx.theme().muted_foreground),
+            ),
+        )
+    }
+
+    fn render_menu_content(
+        &mut self,
+        filtered_items: &[(usize, MenuItem)],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut content = div().flex().flex_col();
+
+        content = content.child(self.render_search_input(cx));
+        content = content.child(self.render_section_label("Basic blocks", cx));
+
+        if filtered_items.is_empty() {
+            content = content.child(
+                div().px_2().py_2().child(
+                    Label::new("No results")
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground),
+                ),
+            );
+        } else {
+            for (visual_idx, (_, item)) in filtered_items.iter().enumerate() {
+                content = content.child(self.render_item(visual_idx, item, cx));
+            }
+        }
+
+        content = content.child(self.render_footer(cx));
+        content
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .px_2()
+            .py_1p5()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                Label::new("Type '/' on the page")
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                Label::new("esc")
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground),
+            )
     }
 
     fn remove_slash_command(&self, element: SharedString) -> SharedString {
@@ -128,19 +332,19 @@ impl SlashMenu {
         SharedString::from(stripped_string)
     }
 
-    fn remove_slash(this: &mut Self, window: &mut Window, cx: &mut Context<Self>) {
-        let current_node = this.state.read(cx).get_current_nodes(this.related_id);
+    fn remove_slash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current_node = self.state.read(cx).get_current_nodes(self.related_id);
         if let Some(node) = current_node {
             match node.element.clone() {
                 RemindrElement::Text(element) => element.update(cx, |element, cx| {
                     element.input_state.update(cx, |element, cx| {
-                        let value = this.remove_slash_command(element.value());
+                        let value = self.remove_slash_command(element.value());
                         element.set_value(value, window, cx);
                     })
                 }),
                 RemindrElement::Heading(element) => element.update(cx, |element, cx| {
                     element.input_state.update(cx, |element, cx| {
-                        let value = this.remove_slash_command(element.value());
+                        let value = self.remove_slash_command(element.value());
                         element.set_value(value, window, cx);
                     })
                 }),
@@ -149,79 +353,82 @@ impl SlashMenu {
         }
     }
 
-    fn on_insert_paragraph(
-        this: &mut Self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        Self::remove_slash(this, window, cx);
-        this.state.update(cx, |state, cx| {
+    fn insert_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_slash(window, cx);
+        self.state.update(cx, |state, cx| {
             state.insert_node_after(
-                this.related_id,
+                self.related_id,
                 &RemindrElement::create_node(
                     NodePayload::Text((TextMetadata::default(), true)),
-                    &this.state,
+                    &self.state,
                     window,
                     cx,
                 ),
             );
         });
 
-        this.open = false;
+        self.open = false;
         cx.emit(SlashMenuDismissEvent {
             restore_focus: false,
         });
         cx.notify();
     }
 
-    fn on_insert_heading(
-        this: &mut Self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        Self::remove_slash(this, window, cx);
-        this.state.update(cx, |state, cx| {
+    fn insert_heading(&mut self, level: u32, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_slash(window, cx);
+        self.state.update(cx, |state, cx| {
             state.insert_node_after(
-                this.related_id,
+                self.related_id,
                 &RemindrElement::create_node(
-                    NodePayload::Heading((HeadingMetadata::default(), true)),
-                    &this.state,
+                    NodePayload::Heading((
+                        HeadingMetadata {
+                            level,
+                            ..Default::default()
+                        },
+                        true,
+                    )),
+                    &self.state,
                     window,
                     cx,
                 ),
             );
         });
 
-        this.open = false;
+        self.open = false;
         cx.emit(SlashMenuDismissEvent {
             restore_focus: false,
         });
         cx.notify();
     }
 
-    fn on_insert_divider(
-        this: &mut Self,
-        event: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        Self::remove_slash(this, window, cx);
+    fn insert_divider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_slash(window, cx);
 
-        let current_slash_menu_id = this.related_id;
+        let current_slash_menu_id = self.related_id;
 
-        this.state.update(cx, |state, cx| {
-            let node = RemindrElement::create_node(NodePayload::Divider, &this.state, window, cx);
+        self.state.update(cx, |state, cx| {
+            let node = RemindrElement::create_node(NodePayload::Divider, &self.state, window, cx);
 
-            state.insert_node_after(this.related_id, &node);
-            this.related_id = node.id;
+            state.insert_node_after(self.related_id, &node);
+            self.related_id = node.id;
         });
 
-        Self::on_insert_paragraph(this, event, window, cx);
-        this.related_id = current_slash_menu_id;
+        // Insert a text node after the divider
+        self.state.update(cx, |state, cx| {
+            state.insert_node_after(
+                self.related_id,
+                &RemindrElement::create_node(
+                    NodePayload::Text((TextMetadata::default(), true)),
+                    &self.state,
+                    window,
+                    cx,
+                ),
+            );
+        });
 
-        this.open = false;
+        self.related_id = current_slash_menu_id;
+
+        self.open = false;
         cx.emit(SlashMenuDismissEvent {
             restore_focus: false,
         });
@@ -238,19 +445,19 @@ impl Focusable for SlashMenu {
 }
 
 impl Render for SlashMenu {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let filtered_items = self.filtered_items(cx);
+
         div()
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                this.move_selection_up(cx);
+            }))
+            .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                this.move_selection_down(cx);
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "up" => {
-                        this.move_selection_up(cx);
-                        cx.stop_propagation();
-                    }
-                    "down" => {
-                        this.move_selection_down(cx);
-                        cx.stop_propagation();
-                    }
                     "enter" => {
                         this.confirm_selection(window, cx);
                         cx.stop_propagation();
@@ -267,56 +474,21 @@ impl Render for SlashMenu {
                 }
             }))
             .child(
-                Popover::new("controlled-popover")
+                Popover::new("slash-menu-popover")
                     .anchor(Corner::TopLeft)
                     .trigger(Empty::default())
                     .open(self.open)
                     .on_open_change(cx.listener(|this, open: &bool, window, cx| {
-                        this.open = *open;
-                        if *open {
-                            this.focus_handle.focus(window);
-                        }
-                        cx.notify();
+                        this.set_open(*open, window, cx);
                     }))
-                    .p_2()
-                    .w(px(365.0))
-                    .bg(cx.theme().secondary)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .gap_1()
-                            .child(
-                                Label::new("Components")
-                                    .text_xs()
-                                    .font_semibold()
-                                    .opacity(0.5),
-                            )
-                            .children([
-                                self.render_item(
-                                    0,
-                                    "Paragraph",
-                                    Icon::default().path("icons/pilcrow.svg"),
-                                    Self::on_insert_paragraph,
-                                    cx,
-                                ),
-                                self.render_item(
-                                    1,
-                                    "Heading",
-                                    Icon::default().path("icons/heading.svg"),
-                                    Self::on_insert_heading,
-                                    cx,
-                                ),
-                                self.render_item(
-                                    2,
-                                    "Divider",
-                                    Icon::default().path("icons/separator-horizontal.svg"),
-                                    Self::on_insert_divider,
-                                    cx,
-                                ),
-                            ]),
-                    ),
+                    .p_1()
+                    .w(px(280.0))
+                    .bg(cx.theme().background)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded_lg()
+                    .shadow_lg()
+                    .child(self.render_menu_content(&filtered_items, cx)),
             )
     }
 }

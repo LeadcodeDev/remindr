@@ -1,17 +1,83 @@
-use gpui::{App, AppContext, Entity, Global, Window};
-use gpui_component::input::InputState;
+use gpui::{App, AppContext, BorrowAppContext, Context, Entity, Global, Window};
+use gpui_component::input::{InputEvent, InputState};
 use serde_json::Value;
-use std::{
-    f64::INFINITY,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::{
     LoadingState,
-    app::{components::node_renderer::NodeRenderer, states::repository_state::RepositoryState},
+    app::{
+        components::{
+            node_renderer::NodeRenderer,
+            nodes::{
+                element::{NodePayload, RemindrElement},
+                text::data::TextMetadata,
+            },
+        },
+        states::repository_state::RepositoryState,
+    },
     domain::database::document::DocumentModel,
 };
+
+/// Helper entity to handle title input events with proper subscription context
+pub struct TitleInputHandler {
+    pub input_state: Entity<InputState>,
+    pub renderer: Entity<NodeRenderer>,
+    pub document_id: i32,
+}
+
+impl TitleInputHandler {
+    pub fn new(
+        document_id: i32,
+        input_state: Entity<InputState>,
+        renderer: Entity<NodeRenderer>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input_state_for_closure = input_state.clone();
+        cx.subscribe_in(&input_state, window, {
+            let renderer = renderer.clone();
+            move |_this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    // Insert a new text node at the beginning and focus it
+                    renderer.update(cx, |renderer, cx| {
+                        let state = renderer.state.clone();
+                        let node = RemindrElement::create_node(
+                            NodePayload::Text((TextMetadata::default(), true)),
+                            &state,
+                            window,
+                            cx,
+                        );
+                        state.update(cx, |node_state, _| {
+                            node_state.insert_node_at(0, &node);
+                        });
+                    });
+                }
+                InputEvent::Change => {
+                    let new_title = input_state_for_closure.read(cx).value().to_string();
+                    cx.update_global::<DocumentState, _>(|doc_state, cx| {
+                        if let Some(doc) = doc_state
+                            .documents
+                            .iter_mut()
+                            .find(|d| d.uid == document_id)
+                        {
+                            doc.title = new_title;
+                        }
+                        doc_state.mark_changed(window, cx);
+                    });
+                }
+                _ => {}
+            }
+        })
+        .detach();
+
+        Self {
+            input_state,
+            renderer,
+            document_id,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct OpenedDocument {
@@ -25,6 +91,7 @@ pub struct DocumentContent {
     pub nodes: Vec<Value>,
     pub renderer: Entity<NodeRenderer>,
     pub title_input: Entity<InputState>,
+    _title_handler: Entity<TitleInputHandler>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -94,23 +161,27 @@ impl DocumentState {
                 .unwrap_or_default();
 
             let renderer = NodeRenderer::new(nodes.clone(), window, cx);
+            let renderer = cx.new(|_| renderer);
 
             // Create title input state
             let title = document.title.clone();
             let title_input = cx.new(|cx| {
-                let mut state = InputState::new(window, cx)
-                    .placeholder("Untitled")
-                    .auto_grow(1, INFINITY as usize)
-                    .soft_wrap(true);
+                let mut state = InputState::new(window, cx).placeholder("Untitled");
 
                 state.set_value(title, window, cx);
                 state
             });
 
+            // Create the title handler to manage Enter key events
+            let title_handler = cx.new(|cx| {
+                TitleInputHandler::new(uid, title_input.clone(), renderer.clone(), window, cx)
+            });
+
             doc.state = LoadingState::Loaded(DocumentContent {
                 nodes,
-                renderer: cx.new(|_| renderer),
+                renderer,
                 title_input,
+                _title_handler: title_handler,
             });
         }
     }
