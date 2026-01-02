@@ -9,6 +9,7 @@ use gpui_component::{
 use remindr_gpui::{
     app::{
         apply_theme,
+        components::rich_text,
         remindr::Remindr,
         screens::AppRouter,
         states::{document_state::DocumentState, repository_state::RepositoryState},
@@ -65,6 +66,7 @@ async fn main() -> Result<(), Error> {
         gpui_component::init(cx);
         gpui_router::init(cx);
         theme::init(cx);
+        rich_text::init(cx);
 
         // Load custom themes from the themes directory (~/.config/remindr/themes)
         let themes_dir = remindr

@@ -159,14 +159,17 @@ impl Render for NodeRenderer {
                 ))
                 .relative()
                 .flex()
-                .items_center()
+                .items_start()
                 .child(
                     div()
                         .invisible()
                         .group_hover("drag_element", |this| this.visible())
                         .absolute()
                         .left_0()
+                        .top_3()
+                        .h_6()
                         .flex()
+                        .items_center()
                         .gap_1()
                         .child({
                             let menu_related_id = self.insert_menu.read(cx).related_id();

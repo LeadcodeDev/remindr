@@ -383,9 +383,9 @@ impl SlashMenu {
         if let Some(node) = current_node {
             match node.element.clone() {
                 RemindrElement::Text(element) => element.update(cx, |element, cx| {
-                    element.input_state.update(cx, |element, cx| {
-                        let value = self.remove_slash_command(element.value());
-                        element.set_value(value, window, cx);
+                    element.rich_text_state.update(cx, |state, cx| {
+                        let value = self.remove_slash_command(state.value());
+                        state.set_content(value.to_string(), cx);
                     })
                 }),
                 RemindrElement::Heading(element) => element.update(cx, |element, cx| {
@@ -493,7 +493,7 @@ impl SlashMenu {
         let current_node = self.state.read(cx).get_current_nodes(self.related_id);
         if let Some(node) = current_node {
             match &node.element {
-                RemindrElement::Text(element) => element.read(cx).input_state.read(cx).value(),
+                RemindrElement::Text(element) => element.read(cx).rich_text_state.read(cx).value(),
                 RemindrElement::Heading(element) => element.read(cx).input_state.read(cx).value(),
                 _ => SharedString::default(),
             }
@@ -507,7 +507,9 @@ impl SlashMenu {
         if let Some(node) = current_node {
             match &node.element {
                 RemindrElement::Text(element) => {
-                    element.read(cx).input_state.read(cx).cursor_position()
+                    // RichText uses Selection instead of Position, return cursor at selection head
+                    let selection = element.read(cx).rich_text_state.read(cx).selection();
+                    Position::new(0, selection.head() as u32)
                 }
                 RemindrElement::Heading(element) => {
                     element.read(cx).input_state.read(cx).cursor_position()

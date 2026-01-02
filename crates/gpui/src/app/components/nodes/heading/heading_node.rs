@@ -178,14 +178,10 @@ impl TextualNodeDelegate for HeadingNode {
                         if let Some(previous_element) = previous_element {
                             if let RemindrElement::Text(element) = previous_element.element.clone()
                             {
-                                let input = element.read(inner_cx).input_state().clone();
-                                input.update(inner_cx, |input, inner_cx| {
-                                    input.focus(window, inner_cx);
-                                    input.set_cursor_position(
-                                        gpui_component::input::Position::new(u32::MAX, u32::MAX),
-                                        window,
-                                        inner_cx,
-                                    );
+                                let rich_text = element.read(inner_cx).rich_text_state().clone();
+                                rich_text.update(inner_cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.move_to_end(cx);
                                 });
                             }
 
@@ -238,9 +234,9 @@ impl TextualNodeDelegate for HeadingNode {
                     let element = inner_cx
                         .new(|cx| TextNode::parse(&data, &state_for_parse, window, cx).unwrap());
 
-                    let input = element.read(inner_cx).input_state().clone();
-                    input.update(inner_cx, |input, inner_cx| {
-                        input.focus(window, inner_cx);
+                    let rich_text = element.read(inner_cx).rich_text_state().clone();
+                    rich_text.update(inner_cx, |state, cx| {
+                        state.focus(window, cx);
                     });
 
                     let node = RemindrNode::new(id, RemindrElement::Text(element));
