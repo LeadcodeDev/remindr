@@ -1,11 +1,12 @@
 use std::{ops::Range, time::Duration};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontStyle,
-    FontWeight, HighlightStyle, InteractiveElement, IntoElement, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
-    Refineable, RenderOnce, SharedString, StrikethroughStyle, StyleRefinement, Styled, StyledText,
-    Task, Timer, UnderlineStyle, Window, actions, canvas, div, prelude::FluentBuilder, px,
+    App, Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, FontStyle, FontWeight, HighlightStyle,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Refineable, RenderOnce,
+    SharedString, StrikethroughStyle, StyleRefinement, Styled, StyledText, Task, Timer,
+    UTF16Selection, UnderlineStyle, Window, actions, canvas, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, menu::ContextMenuExt};
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,7 @@ actions!(
         ToggleUnderline,
         ToggleStrikethrough,
         ToggleCode,
+        ShowCharacterPalette,
     ]
 );
 
@@ -118,6 +120,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-up", MoveToStart, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-down", MoveToEnd, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some(CONTEXT)),
     ]);
 }
 
@@ -306,6 +310,7 @@ pub struct RichTextState {
     last_bounds: Option<Bounds<Pixels>>,
     history: Vec<(String, Vec<TextSpan>, Selection)>,
     history_index: usize,
+    marked_range: Option<Range<usize>>,
 }
 
 impl EventEmitter<RichTextEvent> for RichTextState {}
@@ -327,6 +332,7 @@ impl RichTextState {
             last_bounds: None,
             history: vec![(String::new(), Vec::new(), Selection::default())],
             history_index: 0,
+            marked_range: None,
         }
     }
 
@@ -1184,6 +1190,174 @@ impl Focusable for RichTextState {
     }
 }
 
+impl RichTextState {
+    // UTF-16 conversion helpers for InputHandler
+    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        let start = self.content[..range.start].encode_utf16().count();
+        let end = self.content[..range.end].encode_utf16().count();
+        start..end
+    }
+
+    fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
+        let mut utf8_start = 0;
+        let mut utf16_count = 0;
+
+        for (i, c) in self.content.char_indices() {
+            if utf16_count >= range_utf16.start {
+                utf8_start = i;
+                break;
+            }
+            utf16_count += c.len_utf16();
+            if utf16_count >= range_utf16.start {
+                utf8_start = i + c.len_utf8();
+                break;
+            }
+        }
+        if utf16_count < range_utf16.start {
+            utf8_start = self.content.len();
+        }
+
+        let mut utf8_end = utf8_start;
+        for (i, c) in self.content[utf8_start..].char_indices() {
+            if utf16_count >= range_utf16.end {
+                utf8_end = utf8_start + i;
+                break;
+            }
+            utf16_count += c.len_utf16();
+            if utf16_count >= range_utf16.end {
+                utf8_end = utf8_start + i + c.len_utf8();
+                break;
+            }
+        }
+        if utf16_count < range_utf16.end {
+            utf8_end = self.content.len();
+        }
+
+        utf8_start..utf8_end
+    }
+}
+
+impl EntityInputHandler for RichTextState {
+    fn text_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        actual_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let range = self.range_from_utf16(&range_utf16);
+        actual_range.replace(self.range_to_utf16(&range));
+        Some(self.content[range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let (start, end) = self.selection.normalized();
+        let range = start..end;
+        Some(UTF16Selection {
+            range: self.range_to_utf16(&range),
+            reversed: self.selection.start > self.selection.end,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.marked_range
+            .as_ref()
+            .map(|range| self.range_to_utf16(range))
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.marked_range = None;
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (sel_start, sel_end) = self.selection.normalized();
+        let range = range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .or(self.marked_range.clone())
+            .unwrap_or(sel_start..sel_end);
+
+        self.content =
+            self.content[..range.start].to_owned() + new_text + &self.content[range.end..];
+        let new_cursor = range.start + new_text.len();
+        self.selection = Selection::cursor(new_cursor);
+        self.marked_range = None;
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (sel_start, sel_end) = self.selection.normalized();
+        let range = range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .or(self.marked_range.clone())
+            .unwrap_or(sel_start..sel_end);
+
+        self.content =
+            self.content[..range.start].to_owned() + new_text + &self.content[range.end..];
+
+        if !new_text.is_empty() {
+            self.marked_range = Some(range.start..range.start + new_text.len());
+        } else {
+            self.marked_range = None;
+        }
+
+        let new_cursor = new_selected_range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
+            .unwrap_or_else(|| {
+                let pos = range.start + new_text.len();
+                pos..pos
+            });
+        self.selection = Selection::new(new_cursor.start, new_cursor.end);
+
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        // Return the bounds of the text area for IME positioning
+        Some(bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
 /// Wrapper component that provides full rendering with context menu support
 #[derive(IntoElement)]
 pub struct RichTextView {
@@ -1242,7 +1416,9 @@ impl RenderOnce for RichTextView {
                 cursor_last_space_idx = idx;
             }
 
-            let text_since_line_start = &content[cursor_line_start..=idx];
+            // Use the byte index AFTER the current character (idx + char byte length)
+            let char_end = idx + ch.len_utf8();
+            let text_since_line_start = &content[cursor_line_start..char_end];
             let width = window
                 .text_system()
                 .shape_line(
@@ -1485,6 +1661,11 @@ impl RenderOnce for RichTextView {
                     state.update(cx, |s, cx| s.apply_style(RichTextStyle::Code, cx));
                 }
             })
+            .on_action({
+                move |_: &ShowCharacterPalette, window, _cx| {
+                    window.show_character_palette();
+                }
+            })
             .on_mouse_down(MouseButton::Left, {
                 let state = state.clone();
                 let focus_handle = focus_handle.clone();
@@ -1525,13 +1706,21 @@ impl RenderOnce for RichTextView {
             .cursor_text()
             .child({
                 let state_for_bounds = state.clone();
+                let state_for_input = state.clone();
                 canvas(
                     move |bounds, _window, cx| {
                         state_for_bounds.update(cx, |s, _cx| {
                             s.set_bounds(bounds);
                         });
                     },
-                    |_, _, _, _| {},
+                    move |bounds, _, window, cx| {
+                        // Register input handler for IME/emoji picker support (must be called during paint)
+                        window.handle_input(
+                            &state_for_input.read(cx).focus_handle,
+                            ElementInputHandler::new(bounds, state_for_input.clone()),
+                            cx,
+                        );
+                    },
                 )
                 .size_full()
                 .absolute()
