@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
@@ -10,22 +10,66 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState, NumberInput},
     popover::Popover,
-    scroll::ScrollableElement,
     v_flex,
 };
 
 use crate::{
     LoadingState,
     app::states::{
-        database_state::{DatabaseState, LoadedDatabaseView},
+        database_state::{DatabaseState, DatabaseTabKind, LoadedDatabaseView},
         repository_state::RepositoryState,
     },
     domain::database::database_column::{ColumnType, DatabaseColumnModel},
 };
 
+/// Drag data for a column being reordered in the visibility popover.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct DraggableColumn {
+    pub id: i32,
+    pub label: String,
+    pub icon_path: SharedString,
+}
+
+/// Ghost view displayed while dragging a column row.
+struct ColumnDragGhost {
+    label: String,
+    icon_path: SharedString,
+}
+
+impl Render for ColumnDragGhost {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted_color = cx.theme().foreground.opacity(0.5);
+        let text_color = cx.theme().foreground;
+        let bg = cx.theme().secondary;
+
+        h_flex()
+            .px_2()
+            .py_1()
+            .gap_2()
+            .items_center()
+            .rounded_md()
+            .bg(bg)
+            .child(
+                Icon::default()
+                    .path(self.icon_path.clone())
+                    .size_4()
+                    .text_color(muted_color),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(text_color)
+                    .child(self.label.clone()),
+            )
+    }
+}
+
 pub struct TableView {
     pub key: i64,
     pub database_id: i32,
+    pub view_id: i32,
+    pub kind: DatabaseTabKind,
     cell_inputs: HashMap<(i32, i32), Entity<InputState>>,
     date_picker_states: HashMap<(i32, i32), Entity<DatePickerState>>,
     editing_column_id: Option<i32>,
@@ -33,13 +77,18 @@ pub struct TableView {
     config_popover_column_id: Option<i32>,
     config_default_value_input: Option<Entity<InputState>>,
     type_menu_column_id: Option<i32>,
+    show_columns_popover: bool,
+    columns_search_input: Option<Entity<InputState>>,
+    show_id_column: bool,
 }
 
 impl TableView {
-    pub fn new(key: i64, database_id: i32) -> Self {
+    pub fn new(key: i64, database_id: i32, view_id: i32, kind: DatabaseTabKind) -> Self {
         Self {
             key,
             database_id,
+            view_id,
+            kind,
             cell_inputs: HashMap::new(),
             date_picker_states: HashMap::new(),
             editing_column_id: None,
@@ -47,6 +96,9 @@ impl TableView {
             config_popover_column_id: None,
             config_default_value_input: None,
             type_menu_column_id: None,
+            show_columns_popover: false,
+            columns_search_input: None,
+            show_id_column: true,
         }
     }
 
@@ -73,9 +125,49 @@ impl TableView {
                 cells: cells_map,
             };
 
+            // Collect view IDs that need their view_column_ids refreshed
+            let view_tab_ids: Vec<(i64, i32)> = cx
+                .update(|cx| {
+                    cx.read_global::<DatabaseState, _>(|state, _| {
+                        state
+                            .opened_views
+                            .iter()
+                            .filter(|v| {
+                                v.database_id == database_id && v.kind == DatabaseTabKind::View
+                            })
+                            .map(|v| (v.unique_key(), v.view_id))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+
+            // Fetch per-view column overrides
+            let mut view_col_map: HashMap<i64, Option<Vec<i32>>> = HashMap::new();
+            for (key, view_id) in &view_tab_ids {
+                match db_repo.get_view_columns(*view_id).await {
+                    Ok(vc) if !vc.is_empty() => {
+                        view_col_map.insert(*key, Some(vc.iter().map(|v| v.column_id).collect()));
+                    }
+                    _ => {
+                        view_col_map.insert(*key, None);
+                    }
+                }
+            }
+
             let _ = cx.update(|cx| {
                 cx.update_global::<DatabaseState, _>(|state, _| {
                     state.set_all_views_loaded_for_database(database_id, loaded);
+
+                    // Update per-view column overrides
+                    for (key, col_ids) in view_col_map {
+                        if let Some(v) = state
+                            .opened_views
+                            .iter_mut()
+                            .find(|v| v.unique_key() == key)
+                        {
+                            v.view_column_ids = col_ids;
+                        }
+                    }
                 });
             });
 
@@ -297,31 +389,33 @@ impl TableView {
             .border_t_1()
             .border_color(border_color);
 
-        // Fixed UUID "id" column header
-        header = header.child(
-            h_flex()
-                .w(px(180.0))
-                .min_w(px(180.0))
-                .h_full()
-                .px_2()
-                .gap_1p5()
-                .items_center()
-                .border_r_1()
-                .border_color(border_color)
-                .child(
-                    Icon::default()
-                        .path("icons/hash.svg")
-                        .size_4()
-                        .text_color(icon_color),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_sm()
-                        .text_color(text_color.opacity(0.7))
-                        .child("id"),
-                ),
-        );
+        // UUID "id" column header (toggleable)
+        if self.show_id_column {
+            header = header.child(
+                h_flex()
+                    .w(px(180.0))
+                    .min_w(px(180.0))
+                    .h_full()
+                    .px_2()
+                    .gap_1p5()
+                    .items_center()
+                    .border_r_1()
+                    .border_color(border_color)
+                    .child(
+                        Icon::default()
+                            .path("icons/hash.svg")
+                            .size_4()
+                            .text_color(icon_color),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(text_color.opacity(0.7))
+                            .child("id"),
+                    ),
+            );
+        }
 
         for col in columns {
             let col_id = col.id;
@@ -680,24 +774,29 @@ impl TableView {
                             let db_repo = cx.global::<RepositoryState>().databases.clone();
                             let did = this.database_id;
                             let vid = this.key;
+                            let view_id = this.view_id;
+                            let is_view = this.kind == DatabaseTabKind::View;
 
-                            let next_pos = cx.read_global::<DatabaseState, _>(|state, _| {
-                                state
-                                    .opened_views
-                                    .iter()
-                                    .find(|v| v.unique_key() == vid)
-                                    .and_then(|v| {
-                                        if let LoadingState::Loaded(data) = &v.state {
-                                            Some(data.columns.len() as i32)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .unwrap_or(0)
-                            });
+                            let (next_pos, has_view_columns) =
+                                cx.read_global::<DatabaseState, _>(|state, _| {
+                                    let view =
+                                        state.opened_views.iter().find(|v| v.unique_key() == vid);
+                                    let pos = view
+                                        .and_then(|v| {
+                                            if let LoadingState::Loaded(data) = &v.state {
+                                                Some(data.columns.len() as i32)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or(0);
+                                    let has_vc =
+                                        view.and_then(|v| v.view_column_ids.as_ref()).is_some();
+                                    (pos, has_vc)
+                                });
 
                             cx.spawn(async move |_, cx| {
-                                db_repo
+                                let new_col_id = db_repo
                                     .insert_column(
                                         did,
                                         "Column".to_string(),
@@ -706,6 +805,30 @@ impl TableView {
                                         next_pos,
                                     )
                                     .await?;
+
+                                // If this is a View tab with active column filtering,
+                                // also add the new column to the view's visible columns
+                                if is_view && has_view_columns {
+                                    let _ = db_repo
+                                        .add_view_column(view_id, new_col_id, next_pos)
+                                        .await;
+
+                                    // Update state with new column ID
+                                    let _ = cx.update(|cx| {
+                                        cx.update_global::<DatabaseState, _>(|state, _| {
+                                            if let Some(v) = state
+                                                .opened_views
+                                                .iter_mut()
+                                                .find(|v| v.unique_key() == vid)
+                                            {
+                                                if let Some(ids) = &mut v.view_column_ids {
+                                                    ids.push(new_col_id);
+                                                }
+                                            }
+                                        });
+                                    });
+                                }
+
                                 let _ = cx.update(|cx| {
                                     TableView::reload_into_global(did, cx);
                                 });
@@ -737,31 +860,33 @@ impl TableView {
 
             let mut row_el = h_flex().min_h_9().border_b_1().border_color(border_color);
 
-            // UUID id column (read-only)
-            let uuid_display = if row_uuid.len() > 8 {
-                &row_uuid[..8]
-            } else {
-                row_uuid.as_str()
-            };
-            row_el = row_el.child(
-                div()
-                    .w(px(180.0))
-                    .min_w(px(180.0))
-                    .h_full()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .border_r_1()
-                    .border_color(border_color)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(text_color.opacity(0.4))
-                            .text_ellipsis()
-                            .overflow_hidden()
-                            .child(uuid_display.to_string()),
-                    ),
-            );
+            // UUID id column (read-only, toggleable)
+            if self.show_id_column {
+                let uuid_display = if row_uuid.len() > 8 {
+                    &row_uuid[..8]
+                } else {
+                    row_uuid.as_str()
+                };
+                row_el = row_el.child(
+                    div()
+                        .w(px(180.0))
+                        .min_w(px(180.0))
+                        .h_full()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .border_r_1()
+                        .border_color(border_color)
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(text_color.opacity(0.4))
+                                .text_ellipsis()
+                                .overflow_hidden()
+                                .child(uuid_display.to_string()),
+                        ),
+                );
+            }
 
             for col in columns {
                 let col_id = col.id;
@@ -917,23 +1042,166 @@ impl TableView {
     }
 }
 
-impl Render for TableView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let view_key = self.key;
+/// Toggle a column's visibility in a database view.
+/// `make_visible`: true = show the column, false = hide it.
+fn toggle_column_visibility(cx: &mut App, view_key: i64, col_id: i32, make_visible: bool) {
+    let db_repo = cx.global::<RepositoryState>().databases.clone();
 
-        // Read data from global state
-        let data = cx.read_global::<DatabaseState, _>(|state, _| {
+    cx.update_global::<DatabaseState, _>(|state, _| {
+        if let Some(v) = state
+            .opened_views
+            .iter_mut()
+            .find(|v| v.unique_key() == view_key)
+        {
+            if make_visible {
+                // Add column to visible list
+                match &mut v.view_column_ids {
+                    Some(ids) => {
+                        if !ids.contains(&col_id) {
+                            ids.push(col_id);
+                        }
+                    }
+                    None => {
+                        // Already showing all — nothing to do
+                    }
+                }
+            } else {
+                // Remove column from visible list
+                match &mut v.view_column_ids {
+                    Some(ids) => {
+                        ids.retain(|id| *id != col_id);
+                    }
+                    None => {
+                        // Was showing all; create explicit list without this column
+                        if let LoadingState::Loaded(data) = &v.state {
+                            let ids: Vec<i32> = data
+                                .columns
+                                .iter()
+                                .map(|c| c.id)
+                                .filter(|id| *id != col_id)
+                                .collect();
+                            v.view_column_ids = Some(ids);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Persist
+    let new_ids = cx.read_global::<DatabaseState, _>(|state, _| {
+        state
+            .opened_views
+            .iter()
+            .find(|v| v.unique_key() == view_key)
+            .and_then(|v| v.view_column_ids.clone())
+    });
+
+    if let Some(ids) = new_ids {
+        let vid = cx.read_global::<DatabaseState, _>(|state, _| {
             state
                 .opened_views
                 .iter()
                 .find(|v| v.unique_key() == view_key)
-                .and_then(|v| {
-                    if let LoadingState::Loaded(data) = &v.state {
-                        Some(data.clone())
+                .map(|v| v.view_id)
+                .unwrap_or(0)
+        });
+        cx.spawn(async move |_cx| {
+            db_repo.set_view_columns(vid, &ids).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+}
+
+/// Reorder a column by moving `dragged_id` to the position of `target_id`
+/// within the view's visible column list.
+/// `all_col_ids` is the full list of column IDs (used if view_column_ids is None).
+fn reorder_column(
+    cx: &mut App,
+    view_key: i64,
+    dragged_id: i32,
+    target_id: i32,
+    all_col_ids: &[i32],
+) {
+    if dragged_id == target_id {
+        return;
+    }
+
+    let db_repo = cx.global::<RepositoryState>().databases.clone();
+
+    cx.update_global::<DatabaseState, _>(|state, _| {
+        if let Some(v) = state
+            .opened_views
+            .iter_mut()
+            .find(|v| v.unique_key() == view_key)
+        {
+            // Materialize the column list if it's None (showing all)
+            if v.view_column_ids.is_none() {
+                v.view_column_ids = Some(all_col_ids.to_vec());
+            }
+
+            if let Some(ids) = &mut v.view_column_ids {
+                if let Some(from_idx) = ids.iter().position(|id| *id == dragged_id) {
+                    ids.remove(from_idx);
+                    if let Some(to_idx) = ids.iter().position(|id| *id == target_id) {
+                        ids.insert(to_idx, dragged_id);
                     } else {
-                        None
+                        // target not found, append
+                        ids.push(dragged_id);
                     }
-                })
+                }
+            }
+        }
+    });
+
+    // Persist
+    let new_ids = cx.read_global::<DatabaseState, _>(|state, _| {
+        state
+            .opened_views
+            .iter()
+            .find(|v| v.unique_key() == view_key)
+            .and_then(|v| v.view_column_ids.clone())
+    });
+
+    if let Some(ids) = new_ids {
+        let vid = cx.read_global::<DatabaseState, _>(|state, _| {
+            state
+                .opened_views
+                .iter()
+                .find(|v| v.unique_key() == view_key)
+                .map(|v| v.view_id)
+                .unwrap_or(0)
+        });
+        cx.spawn(async move |_cx| {
+            db_repo.set_view_columns(vid, &ids).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+}
+
+impl Render for TableView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view_key = self.key;
+        let this = cx.entity().clone();
+        let is_view_tab = self.kind == DatabaseTabKind::View;
+
+        // Read data and view_column_ids from global state
+        let (data, view_column_ids) = cx.read_global::<DatabaseState, _>(|state, _| {
+            let view = state
+                .opened_views
+                .iter()
+                .find(|v| v.unique_key() == view_key);
+            let data = view.and_then(|v| {
+                if let LoadingState::Loaded(data) = &v.state {
+                    Some(data.clone())
+                } else {
+                    None
+                }
+            });
+            let col_ids = view.and_then(|v| v.view_column_ids.clone());
+            (data, col_ids)
         });
 
         let Some(data) = data else {
@@ -946,7 +1214,17 @@ impl Render for TableView {
                 .into_any_element();
         };
 
-        let columns = data.columns.clone();
+        let all_columns = data.columns.clone();
+
+        // Filter columns based on view_column_ids
+        let columns: Vec<DatabaseColumnModel> = match &view_column_ids {
+            Some(ids) => ids
+                .iter()
+                .filter_map(|id| all_columns.iter().find(|c| c.id == *id).cloned())
+                .collect(),
+            None => all_columns.clone(),
+        };
+
         let rows_data: Vec<(i32, String, HashMap<i32, String>)> = data
             .rows
             .iter()
@@ -968,62 +1246,599 @@ impl Render for TableView {
 
         let border_color = cx.theme().border;
 
+        // Columns toggle toolbar (only for View tabs)
+        let columns_toolbar: Option<AnyElement> = if is_view_tab {
+            let toolbar_el = if self.show_columns_popover {
+                // Create search input if not yet created
+                if self.columns_search_input.is_none() {
+                    let input = cx.new(|cx| {
+                        InputState::new(window, cx).placeholder("Rechercher une propriete...")
+                    });
+                    self.columns_search_input = Some(input);
+                }
+                let search_input = self.columns_search_input.clone().unwrap();
+                let search_query = search_input.read(cx).value().to_lowercase();
+
+                Popover::new("columns-toggle-popover")
+                    .trigger(
+                        Button::new("columns-toggle-btn")
+                            .label("Columns")
+                            .icon(Icon::default().path("icons/list.svg"))
+                            .ghost()
+                            .xsmall()
+                            .cursor_pointer(),
+                    )
+                    .open(true)
+                    .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                        if !*open {
+                            this.show_columns_popover = false;
+                            // Reset search
+                            if let Some(input) = &this.columns_search_input {
+                                input.update(cx, |state, cx| {
+                                    state.set_value("".to_string(), window, cx);
+                                });
+                            }
+                            cx.notify();
+                        }
+                    }))
+                    .content({
+                        let all_cols = all_columns.clone();
+                        let search_input_for_content = search_input.clone();
+                        let search_q = search_query.clone();
+                        let this = this.clone();
+                        move |_, _window, cx| {
+                            let show_id = this.read(cx).show_id_column;
+                            let text_color = cx.theme().foreground;
+                            let muted_color = cx.theme().foreground.opacity(0.5);
+                            let border = cx.theme().border;
+                            let accent = cx.theme().accent_foreground;
+
+                            // Read fresh view_column_ids from global state
+                            // so the popover reflects drag-reorder changes immediately.
+                            let fresh_vc_ids = cx.read_global::<DatabaseState, _>(|state, _| {
+                                state
+                                    .opened_views
+                                    .iter()
+                                    .find(|v| v.unique_key() == view_key)
+                                    .and_then(|v| v.view_column_ids.clone())
+                            });
+
+                            // Split columns into visible and hidden, filtered by search.
+                            // Visible columns must follow the order of view_column_ids (user-defined order).
+                            let mut visible_cols: Vec<&DatabaseColumnModel> = Vec::new();
+                            let mut hidden_cols: Vec<&DatabaseColumnModel> = Vec::new();
+
+                            let matches_search = |col: &DatabaseColumnModel| -> bool {
+                                search_q.is_empty() || col.label.to_lowercase().contains(&search_q)
+                            };
+
+                            match &fresh_vc_ids {
+                                Some(ids) => {
+                                    // Visible: iterate ids in order, resolve to column
+                                    for id in ids {
+                                        if let Some(col) = all_cols.iter().find(|c| c.id == *id) {
+                                            if matches_search(col) {
+                                                visible_cols.push(col);
+                                            }
+                                        }
+                                    }
+                                    // Hidden: columns not in ids
+                                    for col in &all_cols {
+                                        if !ids.contains(&col.id) && matches_search(col) {
+                                            hidden_cols.push(col);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // All visible, in database order
+                                    for col in &all_cols {
+                                        if matches_search(col) {
+                                            visible_cols.push(col);
+                                        }
+                                    }
+                                }
+                            }
+
+                            let mut content = v_flex().w(px(280.0));
+
+                            // Search input
+                            content = content.child(
+                                div().p_1().border_b_1().border_color(border).child(
+                                    Input::new(&search_input_for_content)
+                                        .small()
+                                        .appearance(false)
+                                        .prefix(
+                                            Icon::default()
+                                                .path("icons/search.svg")
+                                                .size_3()
+                                                .text_color(muted_color),
+                                        ),
+                                ),
+                            );
+
+                            // Check if "id" matches the search filter
+                            let id_matches_search = search_q.is_empty() || "id".contains(&search_q);
+
+                            let has_visible =
+                                !visible_cols.is_empty() || (show_id && id_matches_search);
+                            let has_hidden =
+                                !hidden_cols.is_empty() || (!show_id && id_matches_search);
+
+                            // "Affiche dans la table" section
+                            if has_visible {
+                                content = content.child(
+                                    v_flex().py_1().px_2().gap_0p5().child(
+                                        h_flex()
+                                            .justify_between()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted_color)
+                                                    .child("Affiche dans la table"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("hide-all-btn")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(accent)
+                                                    .child("Tout masquer")
+                                                    .on_click({
+                                                        let this = this.clone();
+                                                        move |_, _, cx| {
+                                                            this.update(cx, |state, _| {
+                                                                state.show_id_column = false;
+                                                            });
+                                                            let db_repo = cx
+                                                                .global::<RepositoryState>()
+                                                                .databases
+                                                                .clone();
+                                                            cx.update_global::<DatabaseState, _>(
+                                                                |state, _| {
+                                                                    if let Some(v) = state
+                                                                        .opened_views
+                                                                        .iter_mut()
+                                                                        .find(|v| {
+                                                                            v.unique_key()
+                                                                                == view_key
+                                                                        })
+                                                                    {
+                                                                        v.view_column_ids =
+                                                                            Some(Vec::new());
+                                                                    }
+                                                                },
+                                                            );
+                                                            // Persist
+                                                            let vid = cx
+                                                                .read_global::<DatabaseState, _>(
+                                                                    |state, _| {
+                                                                        state
+                                                                            .opened_views
+                                                                            .iter()
+                                                                            .find(|v| {
+                                                                                v.unique_key()
+                                                                                    == view_key
+                                                                            })
+                                                                            .map(|v| v.view_id)
+                                                                            .unwrap_or(0)
+                                                                    },
+                                                                );
+                                                            let empty: Vec<i32> = Vec::new();
+                                                            cx.spawn(async move |_cx| {
+                                                                db_repo
+                                                                    .set_view_columns(vid, &empty)
+                                                                    .await?;
+                                                                Ok::<_, anyhow::Error>(())
+                                                            })
+                                                            .detach();
+                                                        }
+                                                    }),
+                                            ),
+                                    ),
+                                );
+
+                                // "id" column row (visible)
+                                if show_id && id_matches_search {
+                                    let this = this.clone();
+                                    content = content.child(
+                                        h_flex()
+                                            .id("id-col-visible-row")
+                                            .px_2()
+                                            .py_0p5()
+                                            .gap_2()
+                                            .items_center()
+                                            .rounded_md()
+                                            .hover(|el| el.bg(cx.theme().secondary))
+                                            .child(
+                                                Icon::default()
+                                                    .path("icons/hash.svg")
+                                                    .size_4()
+                                                    .text_color(muted_color),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(text_color)
+                                                    .child("id"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("eye-btn-id")
+                                                    .cursor_pointer()
+                                                    .child(
+                                                        Icon::default()
+                                                            .path("icons/eye.svg")
+                                                            .size_4()
+                                                            .text_color(muted_color),
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        this.update(cx, |state, _| {
+                                                            state.show_id_column = false;
+                                                        });
+                                                    }),
+                                            ),
+                                    );
+                                }
+
+                                for col in &visible_cols {
+                                    let col_id = col.id;
+                                    let col_label = col.label.clone();
+                                    let icon_path = col.column_type.icon_path();
+                                    let drag_label = col.label.clone();
+                                    let drag_icon: SharedString = icon_path.into();
+                                    let all_col_ids: Vec<i32> =
+                                        all_cols.iter().map(|c| c.id).collect();
+                                    content = content.child(
+                                        h_flex()
+                                            .id(("col-drag-row", col_id as usize))
+                                            .px_2()
+                                            .py_0p5()
+                                            .gap_1()
+                                            .items_center()
+                                            .rounded_md()
+                                            .hover(|el| el.bg(cx.theme().secondary))
+                                            .on_drag(
+                                                DraggableColumn {
+                                                    id: col_id,
+                                                    label: drag_label.clone(),
+                                                    icon_path: drag_icon.clone(),
+                                                },
+                                                {
+                                                    let label = drag_label.clone();
+                                                    let icon = drag_icon.clone();
+                                                    move |_, _, _, cx| {
+                                                        cx.new(|_| ColumnDragGhost {
+                                                            label: label.clone(),
+                                                            icon_path: icon.clone(),
+                                                        })
+                                                    }
+                                                },
+                                            )
+                                            .on_drop({
+                                                let all_ids = all_col_ids.clone();
+                                                move |dragged: &DraggableColumn, _, cx| {
+                                                    reorder_column(
+                                                        cx, view_key, dragged.id, col_id, &all_ids,
+                                                    );
+                                                }
+                                            })
+                                            .child(
+                                                Icon::default()
+                                                    .path("icons/grip-vertical.svg")
+                                                    .size_3()
+                                                    .text_color(muted_color.opacity(0.5)),
+                                            )
+                                            .child(
+                                                Icon::default()
+                                                    .path(icon_path)
+                                                    .size_4()
+                                                    .text_color(muted_color),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(text_color)
+                                                    .text_ellipsis()
+                                                    .overflow_hidden()
+                                                    .child(col_label),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id(("eye-btn", col_id as usize))
+                                                    .cursor_pointer()
+                                                    .child(
+                                                        Icon::default()
+                                                            .path("icons/eye.svg")
+                                                            .size_4()
+                                                            .text_color(muted_color),
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        toggle_column_visibility(
+                                                            cx, view_key, col_id, false,
+                                                        );
+                                                    }),
+                                            ),
+                                    );
+                                }
+                            }
+
+                            // Separator between sections
+                            if has_visible && has_hidden {
+                                content = content.child(div().h(px(1.0)).mx_2().bg(border));
+                            }
+
+                            // "Masque dans la table" section
+                            if has_hidden {
+                                content = content.child(
+                                    v_flex().py_1().px_2().gap_0p5().child(
+                                        h_flex()
+                                            .justify_between()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted_color)
+                                                    .child("Masque dans la table"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("show-all-btn")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(accent)
+                                                    .child("Tout afficher")
+                                                    .on_click({
+                                                        let this = this.clone();
+                                                        move |_, _, cx| {
+                                                            this.update(cx, |state, _| {
+                                                                state.show_id_column = true;
+                                                            });
+                                                            let db_repo = cx
+                                                                .global::<RepositoryState>()
+                                                                .databases
+                                                                .clone();
+                                                            cx.update_global::<DatabaseState, _>(
+                                                                |state, _| {
+                                                                    if let Some(v) = state
+                                                                        .opened_views
+                                                                        .iter_mut()
+                                                                        .find(|v| {
+                                                                            v.unique_key()
+                                                                                == view_key
+                                                                        })
+                                                                    {
+                                                                        v.view_column_ids = None;
+                                                                    }
+                                                                },
+                                                            );
+                                                            // Persist: clear all overrides
+                                                            let vid = cx
+                                                                .read_global::<DatabaseState, _>(
+                                                                    |state, _| {
+                                                                        state
+                                                                            .opened_views
+                                                                            .iter()
+                                                                            .find(|v| {
+                                                                                v.unique_key()
+                                                                                    == view_key
+                                                                            })
+                                                                            .map(|v| v.view_id)
+                                                                            .unwrap_or(0)
+                                                                    },
+                                                                );
+                                                            let empty: Vec<i32> = Vec::new();
+                                                            cx.spawn(async move |_cx| {
+                                                                db_repo
+                                                                    .set_view_columns(vid, &empty)
+                                                                    .await?;
+                                                                Ok::<_, anyhow::Error>(())
+                                                            })
+                                                            .detach();
+                                                        }
+                                                    }),
+                                            ),
+                                    ),
+                                );
+
+                                // "id" column row (hidden)
+                                if !show_id && id_matches_search {
+                                    let this = this.clone();
+                                    content = content.child(
+                                        h_flex()
+                                            .id("id-col-hidden-row")
+                                            .px_2()
+                                            .py_0p5()
+                                            .gap_2()
+                                            .items_center()
+                                            .rounded_md()
+                                            .hover(|el| el.bg(cx.theme().secondary))
+                                            .child(
+                                                Icon::default()
+                                                    .path("icons/hash.svg")
+                                                    .size_4()
+                                                    .text_color(muted_color),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(text_color.opacity(0.5))
+                                                    .child("id"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("eye-off-btn-id")
+                                                    .cursor_pointer()
+                                                    .child(
+                                                        Icon::default()
+                                                            .path("icons/eye-off.svg")
+                                                            .size_4()
+                                                            .text_color(muted_color.opacity(0.5)),
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        this.update(cx, |state, _| {
+                                                            state.show_id_column = true;
+                                                        });
+                                                    }),
+                                            ),
+                                    );
+                                }
+
+                                for col in &hidden_cols {
+                                    let col_id = col.id;
+                                    let col_label = col.label.clone();
+                                    let icon_path = col.column_type.icon_path();
+
+                                    content = content.child(
+                                        h_flex()
+                                            .px_2()
+                                            .py_0p5()
+                                            .gap_2()
+                                            .items_center()
+                                            .rounded_md()
+                                            .hover(|el| el.bg(cx.theme().secondary))
+                                            .child(
+                                                Icon::default()
+                                                    .path(icon_path)
+                                                    .size_4()
+                                                    .text_color(muted_color),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(text_color.opacity(0.5))
+                                                    .text_ellipsis()
+                                                    .overflow_hidden()
+                                                    .child(col_label),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id(("eye-off-btn", col_id as usize))
+                                                    .cursor_pointer()
+                                                    .child(
+                                                        Icon::default()
+                                                            .path("icons/eye-off.svg")
+                                                            .size_4()
+                                                            .text_color(muted_color.opacity(0.5)),
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        toggle_column_visibility(
+                                                            cx, view_key, col_id, true,
+                                                        );
+                                                    }),
+                                            ),
+                                    );
+                                }
+                            }
+
+                            // Bottom padding
+                            content = content.child(div().h(px(4.0)));
+
+                            content
+                        }
+                    })
+                    .into_any_element()
+            } else {
+                // Reset search input when popover is closed
+                self.columns_search_input = None;
+
+                Button::new("columns-toggle-btn")
+                    .label("Columns")
+                    .icon(Icon::default().path("icons/list.svg"))
+                    .ghost()
+                    .xsmall()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_columns_popover = true;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            };
+            Some(toolbar_el)
+        } else {
+            None
+        };
+
         let header = self.render_header(&columns, window, cx).into_any_element();
         let row_elements = self.render_rows(&columns, &rows_data, window, cx);
 
-        // id column + user columns + add column button
-        let total_width = 180.0 + (columns.len() as f32 * 180.0) + 40.0;
+        // id column (if visible) + user columns + add column button
+        let id_col_width = if self.show_id_column { 180.0 } else { 0.0 };
+        let total_width = id_col_width + (columns.len() as f32 * 180.0) + 40.0;
 
-        div()
-            .id("table-scroll")
+        v_flex()
             .w_full()
             .h_full()
-            .overflow_x_scroll()
+            .when(columns_toolbar.is_some(), |this| {
+                this.child(
+                    h_flex()
+                        .px_2()
+                        .py_1()
+                        .items_center()
+                        .border_b_1()
+                        .border_color(border_color)
+                        .child(columns_toolbar.unwrap()),
+                )
+            })
             .child(
-                v_flex()
-                    .min_w(px(total_width))
-                    .h_full()
-                    .flex_shrink_0()
-                    .child(header)
+                div()
+                    .id("table-scroll")
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_x_scroll()
                     .child(
-                        div()
-                            .id("table-rows-scroll")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
+                        v_flex()
+                            .min_w(px(total_width))
+                            .h_full()
+                            .flex_shrink_0()
+                            .child(header)
                             .child(
-                                v_flex().children(row_elements).child(
-                                    // "+ New row" button
-                                    h_flex()
-                                        .min_h_9()
-                                        .px_2()
-                                        .items_center()
-                                        .border_b_1()
-                                        .border_color(border_color)
-                                        .child(
-                                            Button::new("add-row-btn")
-                                                .label("+ New row")
-                                                .ghost()
-                                                .xsmall()
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    let db_repo = cx
-                                                        .global::<RepositoryState>()
-                                                        .databases
-                                                        .clone();
-                                                    let did = this.database_id;
+                                div()
+                                    .id("table-rows-scroll")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .child(
+                                        v_flex().children(row_elements).child(
+                                            // "+ New row" button
+                                            h_flex()
+                                                .min_h_9()
+                                                .px_2()
+                                                .items_center()
+                                                .border_b_1()
+                                                .border_color(border_color)
+                                                .child(
+                                                    Button::new("add-row-btn")
+                                                        .label("+ New row")
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                let db_repo = cx
+                                                                    .global::<RepositoryState>()
+                                                                    .databases
+                                                                    .clone();
+                                                                let did = this.database_id;
 
-                                                    cx.spawn(async move |_, cx| {
-                                                        db_repo.insert_row(did).await?;
-                                                        let _ = cx.update(|cx| {
-                                                            TableView::reload_into_global(did, cx);
-                                                        });
-                                                        Ok::<_, anyhow::Error>(())
-                                                    })
-                                                    .detach();
-                                                })),
+                                                                cx.spawn(async move |_, cx| {
+                                                                    db_repo.insert_row(did).await?;
+                                                                    let _ = cx.update(|cx| {
+                                                                        TableView::reload_into_global(did, cx);
+                                                                    });
+                                                                    Ok::<_, anyhow::Error>(())
+                                                                })
+                                                                .detach();
+                                                            },
+                                                        )),
+                                                ),
                                         ),
-                                ),
+                                    ),
                             ),
                     ),
             )

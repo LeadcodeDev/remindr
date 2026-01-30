@@ -5,7 +5,9 @@ use crate::domain::database::database_cell::DatabaseCellModel;
 use crate::domain::database::database_column::{ColumnConfig, ColumnType, DatabaseColumnModel};
 use crate::domain::database::database_model::DatabaseModel;
 use crate::domain::database::database_row::DatabaseRowModel;
-use crate::domain::database::database_view::{DatabaseViewModel, ViewType};
+use crate::domain::database::database_view::{
+    DatabaseViewColumnModel, DatabaseViewModel, ViewType,
+};
 use crate::domain::database::document::DocumentModel;
 use crate::domain::database::folder::FolderModel;
 
@@ -138,6 +140,25 @@ impl From<DatabaseViewEntity> for DatabaseViewModel {
             name: entity.name,
             view_type: ViewType::from_str(&entity.view_type),
             folder_id: entity.folder_id,
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct DatabaseViewColumnEntity {
+    pub id: i32,
+    pub view_id: i32,
+    pub column_id: i32,
+    pub position: i32,
+}
+
+impl From<DatabaseViewColumnEntity> for DatabaseViewColumnModel {
+    fn from(entity: DatabaseViewColumnEntity) -> Self {
+        DatabaseViewColumnModel {
+            id: entity.id,
+            view_id: entity.view_id,
+            column_id: entity.column_id,
+            position: entity.position,
         }
     }
 }

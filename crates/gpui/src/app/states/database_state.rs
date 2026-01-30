@@ -27,6 +27,8 @@ pub struct OpenedDatabaseView {
     pub kind: DatabaseTabKind,
     pub state: LoadingState<LoadedDatabaseView>,
     pub loading_in_progress: bool,
+    /// Column IDs visible in this view. `None` = show all (Source tabs or no overrides).
+    pub view_column_ids: Option<Vec<i32>>,
 }
 
 impl OpenedDatabaseView {
@@ -86,6 +88,7 @@ impl DatabaseState {
             kind: DatabaseTabKind::View,
             state: LoadingState::Loading,
             loading_in_progress: false,
+            view_column_ids: None,
         };
         let key = entry.unique_key();
         let already_exists = self.opened_views.iter().any(|v| v.unique_key() == key);
@@ -104,6 +107,7 @@ impl DatabaseState {
             kind: DatabaseTabKind::Source,
             state: LoadingState::Loading,
             loading_in_progress: false,
+            view_column_ids: None,
         };
         let key = entry.unique_key();
         let already_exists = self.opened_views.iter().any(|v| v.unique_key() == key);

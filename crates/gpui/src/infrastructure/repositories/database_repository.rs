@@ -4,13 +4,15 @@ use sqlx::{SqlitePool, query, query_as};
 use crate::{
     Utils,
     domain::database::{
-        database_cell::DatabaseCellModel, database_column::DatabaseColumnModel,
-        database_model::DatabaseModel, database_row::DatabaseRowModel,
-        database_view::DatabaseViewModel,
+        database_cell::DatabaseCellModel,
+        database_column::DatabaseColumnModel,
+        database_model::DatabaseModel,
+        database_row::DatabaseRowModel,
+        database_view::{DatabaseViewColumnModel, DatabaseViewModel},
     },
     infrastructure::entities::{
         DatabaseCellEntity, DatabaseColumnEntity, DatabaseEntity, DatabaseRowEntity,
-        DatabaseViewEntity,
+        DatabaseViewColumnEntity, DatabaseViewEntity,
     },
 };
 
@@ -276,6 +278,70 @@ impl DatabaseRepository {
     pub async fn delete_view(&self, id: i32) -> Result<(), Error> {
         query("DELETE FROM database_views WHERE id = ?")
             .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::from)?;
+        Ok(())
+    }
+
+    // ── View Columns ──
+
+    pub async fn get_view_columns(
+        &self,
+        view_id: i32,
+    ) -> Result<Vec<DatabaseViewColumnModel>, Error> {
+        query_as::<_, DatabaseViewColumnEntity>(
+            "SELECT id, view_id, column_id, position FROM database_view_columns WHERE view_id = ? ORDER BY position ASC",
+        )
+        .bind(view_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)
+        .map(|rows| rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn set_view_columns(&self, view_id: i32, column_ids: &[i32]) -> Result<(), Error> {
+        query("DELETE FROM database_view_columns WHERE view_id = ?")
+            .bind(view_id)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::from)?;
+
+        for (pos, column_id) in column_ids.iter().enumerate() {
+            query(
+                "INSERT INTO database_view_columns (view_id, column_id, position) VALUES (?, ?, ?)",
+            )
+            .bind(view_id)
+            .bind(column_id)
+            .bind(pos as i32)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::from)?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_view_column(
+        &self,
+        view_id: i32,
+        column_id: i32,
+        position: i32,
+    ) -> Result<(), Error> {
+        query("INSERT OR IGNORE INTO database_view_columns (view_id, column_id, position) VALUES (?, ?, ?)")
+            .bind(view_id)
+            .bind(column_id)
+            .bind(position)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::from)?;
+        Ok(())
+    }
+
+    pub async fn remove_view_column(&self, view_id: i32, column_id: i32) -> Result<(), Error> {
+        query("DELETE FROM database_view_columns WHERE view_id = ? AND column_id = ?")
+            .bind(view_id)
+            .bind(column_id)
             .execute(&self.pool)
             .await
             .map_err(Error::from)?;
