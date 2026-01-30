@@ -26,4 +26,5 @@ smol = "2.0.2"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "derive", "migrate", "uuid", "chrono", "json"] }
 tokio = { version = "1.48", features = ["full"] }
 unicode-segmentation = "1.12.0"
+sys-locale = "0.3"
 uuid = { version = "1.18.1", features = ["v7"] }

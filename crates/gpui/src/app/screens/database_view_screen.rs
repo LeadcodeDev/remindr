@@ -171,6 +171,8 @@ impl Render for DatabaseViewScreen {
         self.table_views.retain(|id, _| open_ids.contains(id));
 
         div()
+            .flex()
+            .flex_col()
             .w_full()
             .h_full()
             .relative()
@@ -305,7 +307,8 @@ impl DatabaseViewScreen {
                         .bg(cx.theme().background.lighten(0.2))
                         .flex()
                         .flex_col()
-                        .h_full()
+                        .flex_1()
+                        .min_h_0()
                         .w_full()
                         .overflow_hidden()
                         .child(table_view)

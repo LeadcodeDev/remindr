@@ -1013,6 +1013,7 @@ impl Render for AppSidebar {
             .child(
                 div()
                     .border_t_1()
+                    .pb_3()
                     .border_color(border_color)
                     .child(databases_header)
                     .child(

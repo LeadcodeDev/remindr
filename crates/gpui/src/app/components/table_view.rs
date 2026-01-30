@@ -9,7 +9,6 @@ use gpui_component::{
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     h_flex,
     input::{Input, InputEvent, InputState, NumberInput},
-    menu::{ContextMenuExt as _, PopupMenuItem},
     popover::Popover,
     scroll::ScrollableElement,
     v_flex,
@@ -33,6 +32,7 @@ pub struct TableView {
     column_label_input: Option<Entity<InputState>>,
     config_popover_column_id: Option<i32>,
     config_default_value_input: Option<Entity<InputState>>,
+    type_menu_column_id: Option<i32>,
 }
 
 impl TableView {
@@ -46,6 +46,7 @@ impl TableView {
             column_label_input: None,
             config_popover_column_id: None,
             config_default_value_input: None,
+            type_menu_column_id: None,
         }
     }
 
@@ -232,7 +233,8 @@ impl TableView {
         let parsed_date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok();
 
         let picker = cx.new(|cx| {
-            let mut state = DatePickerState::new(window, cx);
+            let mut state =
+                DatePickerState::new(window, cx).date_format(crate::Utils::locale_date_format());
             if let Some(date) = parsed_date {
                 state.set_date(date, window, cx);
             }
@@ -282,7 +284,6 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let header_bg = cx.theme().table_head;
         let border_color = cx.theme().border;
         let text_color = cx.theme().foreground;
         let icon_color = cx.theme().foreground.opacity(0.5);
@@ -291,10 +292,9 @@ impl TableView {
         let database_id = self.database_id;
 
         let mut header = h_flex()
-            .w_full()
             .min_h_9()
-            .bg(header_bg)
             .border_b_1()
+            .border_t_1()
             .border_color(border_color);
 
         // Fixed UUID "id" column header
@@ -342,38 +342,74 @@ impl TableView {
                 .border_r_1()
                 .border_color(border_color);
 
-            // Type icon with context menu to change type
+            // Type icon with popover menu to change type (no shadow)
             let vid = view_key;
             let did = database_id;
-            cell = cell.child(
-                div()
-                    .id(("col-type-icon", col_id as usize))
-                    .cursor_pointer()
-                    .child(
-                        Icon::default()
-                            .path(type_icon_path)
-                            .size_4()
-                            .text_color(icon_color),
-                    )
-                    .context_menu({
-                        let col_type = col_type.clone();
-                        move |menu, _, _| {
-                            let types = [
-                                (ColumnType::String, "Text", "icons/type.svg"),
-                                (ColumnType::Int, "Number", "icons/hash.svg"),
-                                (ColumnType::Bool, "Checkbox", "icons/check-square.svg"),
-                                (ColumnType::Date, "Date", "icons/calendar.svg"),
-                            ];
+            let is_type_menu_open = self.type_menu_column_id == Some(col_id);
 
-                            let mut m = menu;
-                            for (ct, label, icon) in &types {
-                                if *ct == col_type {
-                                    continue;
-                                }
-                                let new_type = ct.clone();
-                                m = m.item(
-                                    PopupMenuItem::new(*label)
-                                        .icon(Icon::default().path(*icon))
+            if is_type_menu_open {
+                let col_type_for_menu = col_type.clone();
+                cell = cell.child(
+                    Popover::new(("col-type-menu", col_id as usize))
+                        .trigger(
+                            Button::new(("col-type-icon", col_id as usize))
+                                .icon(
+                                    Icon::default()
+                                        .path(type_icon_path)
+                                        .size_4()
+                                        .text_color(icon_color),
+                                )
+                                .ghost()
+                                .xsmall()
+                                .cursor_pointer(),
+                        )
+                        .appearance(false)
+                        .open(true)
+                        .on_open_change(cx.listener(move |this, open: &bool, _, cx| {
+                            if !*open {
+                                this.type_menu_column_id = None;
+                                cx.notify();
+                            }
+                        }))
+                        .content({
+                            let col_type = col_type_for_menu.clone();
+                            move |_, _, cx| {
+                                let bg = cx.theme().popover;
+                                let border = cx.theme().border;
+                                let radius = cx.theme().radius;
+
+                                let types: Vec<(ColumnType, &str, &str)> = vec![
+                                    (ColumnType::String, "Text", "icons/type.svg"),
+                                    (ColumnType::Int, "Number", "icons/hash.svg"),
+                                    (ColumnType::Bool, "Checkbox", "icons/check-square.svg"),
+                                    (ColumnType::Date, "Date", "icons/calendar.svg"),
+                                ];
+
+                                let mut menu = v_flex()
+                                    .bg(bg)
+                                    .border_1()
+                                    .border_color(border)
+                                    .rounded(radius)
+                                    .p_1()
+                                    .min_w(px(160.0));
+
+                                for (ct, label, icon) in &types {
+                                    if *ct == col_type {
+                                        continue;
+                                    }
+                                    let new_type = ct.clone();
+                                    let icon_path = *icon;
+                                    let label_str = *label;
+                                    menu = menu.child(
+                                        Button::new(SharedString::from(format!(
+                                            "type-{}",
+                                            label_str
+                                        )))
+                                        .label(label_str)
+                                        .icon(Icon::default().path(icon_path))
+                                        .ghost()
+                                        .xsmall()
+                                        .w_full()
                                         .on_click({
                                             let new_type = new_type.clone();
                                             move |_, _, cx| {
@@ -416,28 +452,55 @@ impl TableView {
                                                 }
                                             }
                                         }),
-                                );
-                            }
+                                    );
+                                }
 
-                            m.separator().item(
-                                PopupMenuItem::new("Delete column")
-                                    .icon(Icon::default().path("icons/trash-2.svg"))
-                                    .on_click(move |_, _, cx| {
-                                        let db_repo =
-                                            cx.global::<RepositoryState>().databases.clone();
-                                        cx.spawn(async move |cx| {
-                                            db_repo.delete_column(col_id).await?;
-                                            let _ = cx.update(|cx| {
-                                                TableView::reload_into_global(did, cx);
-                                            });
-                                            Ok::<_, anyhow::Error>(())
-                                        })
-                                        .detach();
-                                    }),
-                            )
-                        }
-                    }),
-            );
+                                // Separator
+                                menu = menu.child(div().h(px(1.0)).my_1().bg(border));
+
+                                // Delete column
+                                menu = menu.child(
+                                    Button::new("delete-col")
+                                        .label("Delete column")
+                                        .icon(Icon::default().path("icons/trash-2.svg"))
+                                        .ghost()
+                                        .xsmall()
+                                        .w_full()
+                                        .on_click(move |_, _, cx| {
+                                            let db_repo =
+                                                cx.global::<RepositoryState>().databases.clone();
+                                            cx.spawn(async move |cx| {
+                                                db_repo.delete_column(col_id).await?;
+                                                let _ = cx.update(|cx| {
+                                                    TableView::reload_into_global(did, cx);
+                                                });
+                                                Ok::<_, anyhow::Error>(())
+                                            })
+                                            .detach();
+                                        }),
+                                );
+
+                                menu
+                            }
+                        }),
+                );
+            } else {
+                cell = cell.child(
+                    div()
+                        .id(("col-type-icon", col_id as usize))
+                        .cursor_pointer()
+                        .child(
+                            Icon::default()
+                                .path(type_icon_path)
+                                .size_4()
+                                .text_color(icon_color),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.type_menu_column_id = Some(col_id);
+                            cx.notify();
+                        })),
+                );
+            }
 
             // Column label (editable on double-click)
             if is_editing {
@@ -672,11 +735,7 @@ impl TableView {
         for (row_id, row_uuid, row_cells) in rows {
             let row_id = *row_id;
 
-            let mut row_el = h_flex()
-                .w_full()
-                .min_h_9()
-                .border_b_1()
-                .border_color(border_color);
+            let mut row_el = h_flex().min_h_9().border_b_1().border_color(border_color);
 
             // UUID id column (read-only)
             let uuid_display = if row_uuid.len() > 8 {
@@ -782,15 +841,18 @@ impl TableView {
                             .px_1()
                             .flex()
                             .items_center()
+                            .overflow_hidden()
                             .border_r_1()
                             .border_color(border_color)
                             .child(
-                                DatePicker::new(&picker)
-                                    .xsmall()
-                                    .cleanable(true)
-                                    .appearance(false)
-                                    .number_of_months(1)
-                                    .placeholder("Pick a date"),
+                                div().w_full().child(
+                                    DatePicker::new(&picker)
+                                        .xsmall()
+                                        .cleanable(true)
+                                        .appearance(false)
+                                        .placeholder("")
+                                        .number_of_months(1),
+                                ),
                             )
                     }
                     ColumnType::String => {
@@ -909,48 +971,61 @@ impl Render for TableView {
         let header = self.render_header(&columns, window, cx).into_any_element();
         let row_elements = self.render_rows(&columns, &rows_data, window, cx);
 
-        v_flex()
+        // id column + user columns + add column button
+        let total_width = 180.0 + (columns.len() as f32 * 180.0) + 40.0;
+
+        div()
+            .id("table-scroll")
             .w_full()
             .h_full()
-            .overflow_hidden()
+            .overflow_x_scroll()
             .child(
-                div().flex_1().min_h_0().overflow_scrollbar().child(
-                    v_flex()
-                        .min_w_full()
-                        .child(header)
-                        .children(row_elements)
-                        .child(
-                            // "+ New row" button
-                            h_flex()
-                                .w_full()
-                                .min_h_9()
-                                .px_2()
-                                .items_center()
-                                .border_b_1()
-                                .border_color(border_color)
-                                .child(
-                                    Button::new("add-row-btn")
-                                        .label("+ New row")
-                                        .ghost()
-                                        .xsmall()
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            let db_repo =
-                                                cx.global::<RepositoryState>().databases.clone();
-                                            let did = this.database_id;
+                v_flex()
+                    .min_w(px(total_width))
+                    .h_full()
+                    .flex_shrink_0()
+                    .child(header)
+                    .child(
+                        div()
+                            .id("table-rows-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .child(
+                                v_flex().children(row_elements).child(
+                                    // "+ New row" button
+                                    h_flex()
+                                        .min_h_9()
+                                        .px_2()
+                                        .items_center()
+                                        .border_b_1()
+                                        .border_color(border_color)
+                                        .child(
+                                            Button::new("add-row-btn")
+                                                .label("+ New row")
+                                                .ghost()
+                                                .xsmall()
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    let db_repo = cx
+                                                        .global::<RepositoryState>()
+                                                        .databases
+                                                        .clone();
+                                                    let did = this.database_id;
 
-                                            cx.spawn(async move |_, cx| {
-                                                db_repo.insert_row(did).await?;
-                                                let _ = cx.update(|cx| {
-                                                    TableView::reload_into_global(did, cx);
-                                                });
-                                                Ok::<_, anyhow::Error>(())
-                                            })
-                                            .detach();
-                                        })),
+                                                    cx.spawn(async move |_, cx| {
+                                                        db_repo.insert_row(did).await?;
+                                                        let _ = cx.update(|cx| {
+                                                            TableView::reload_into_global(did, cx);
+                                                        });
+                                                        Ok::<_, anyhow::Error>(())
+                                                    })
+                                                    .detach();
+                                                })),
+                                        ),
                                 ),
-                        ),
-                ),
+                            ),
+                    ),
             )
             .into_any_element()
     }
