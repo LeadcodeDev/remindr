@@ -1,0 +1,1 @@
+ALTER TABLE database_rows ADD COLUMN uuid TEXT NOT NULL DEFAULT '';

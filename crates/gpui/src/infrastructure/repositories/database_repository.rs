@@ -2,6 +2,7 @@ use anyhow::Error;
 use sqlx::{SqlitePool, query, query_as};
 
 use crate::{
+    Utils,
     domain::database::{
         database_cell::DatabaseCellModel, database_column::DatabaseColumnModel,
         database_model::DatabaseModel, database_row::DatabaseRowModel,
@@ -134,7 +135,7 @@ impl DatabaseRepository {
 
     pub async fn get_rows(&self, database_id: i32) -> Result<Vec<DatabaseRowModel>, Error> {
         query_as::<_, DatabaseRowEntity>(
-            "SELECT id, database_id FROM database_rows WHERE database_id = ? ORDER BY id ASC",
+            "SELECT id, database_id, uuid FROM database_rows WHERE database_id = ? ORDER BY id ASC",
         )
         .bind(database_id)
         .fetch_all(&self.pool)
@@ -144,12 +145,35 @@ impl DatabaseRepository {
     }
 
     pub async fn insert_row(&self, database_id: i32) -> Result<i32, Error> {
-        let res = query("INSERT INTO database_rows (database_id) VALUES (?)")
+        let uuid = Utils::generate_uuid().to_string();
+        let res = query("INSERT INTO database_rows (database_id, uuid) VALUES (?, ?)")
             .bind(database_id)
+            .bind(uuid)
             .execute(&self.pool)
             .await
             .map_err(Error::from)?;
         Ok(res.last_insert_rowid() as i32)
+    }
+
+    pub async fn backfill_row_uuids(&self) -> Result<(), Error> {
+        let rows = query_as::<_, DatabaseRowEntity>(
+            "SELECT id, database_id, uuid FROM database_rows WHERE uuid = ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+
+        for row in rows {
+            let uuid = Utils::generate_uuid().to_string();
+            query("UPDATE database_rows SET uuid = ? WHERE id = ?")
+                .bind(uuid)
+                .bind(row.id)
+                .execute(&self.pool)
+                .await
+                .map_err(Error::from)?;
+        }
+
+        Ok(())
     }
 
     pub async fn delete_row(&self, id: i32) -> Result<(), Error> {

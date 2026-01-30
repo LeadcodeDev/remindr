@@ -6,7 +6,7 @@ pub enum ColumnType {
     Int,
     String,
     Bool,
-    Select,
+    Date,
 }
 
 impl ColumnType {
@@ -15,7 +15,7 @@ impl ColumnType {
             ColumnType::Int => "int",
             ColumnType::String => "string",
             ColumnType::Bool => "bool",
-            ColumnType::Select => "select",
+            ColumnType::Date => "date",
         }
     }
 
@@ -23,7 +23,7 @@ impl ColumnType {
         match s {
             "int" => ColumnType::Int,
             "bool" => ColumnType::Bool,
-            "select" => ColumnType::Select,
+            "date" => ColumnType::Date,
             _ => ColumnType::String,
         }
     }
@@ -33,7 +33,7 @@ impl ColumnType {
             ColumnType::Int => "Number",
             ColumnType::String => "Text",
             ColumnType::Bool => "Checkbox",
-            ColumnType::Select => "Select",
+            ColumnType::Date => "Date",
         }
     }
 
@@ -42,31 +42,21 @@ impl ColumnType {
             ColumnType::Int => "icons/hash.svg",
             ColumnType::String => "icons/type.svg",
             ColumnType::Bool => "icons/check-square.svg",
-            ColumnType::Select => "icons/list.svg",
+            ColumnType::Date => "icons/calendar.svg",
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum SelectMode {
-    Single,
-    Multiple,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ColumnConfig {
     #[serde(default)]
-    pub mode: Option<SelectMode>,
-    #[serde(default)]
-    pub options: Vec<String>,
+    pub default_value: Option<String>,
 }
 
 impl Default for ColumnConfig {
     fn default() -> Self {
         Self {
-            mode: None,
-            options: Vec::new(),
+            default_value: None,
         }
     }
 }

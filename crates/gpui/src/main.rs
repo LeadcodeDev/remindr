@@ -107,6 +107,11 @@ async fn main() -> Result<(), Error> {
         .await
         .map_err(|err| Error::msg(err.to_string()))?;
 
+    // Backfill UUIDs for existing rows that were created before the uuid column
+    DatabaseRepository::new(pool.clone())
+        .backfill_row_uuids()
+        .await?;
+
     app.on_reopen(|cx| {
         if let Some(window) = cx.active_window() {
             window

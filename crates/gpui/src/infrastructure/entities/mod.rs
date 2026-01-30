@@ -89,6 +89,7 @@ impl From<DatabaseColumnEntity> for DatabaseColumnModel {
 pub struct DatabaseRowEntity {
     pub id: i32,
     pub database_id: i32,
+    pub uuid: String,
 }
 
 impl From<DatabaseRowEntity> for DatabaseRowModel {
@@ -96,6 +97,7 @@ impl From<DatabaseRowEntity> for DatabaseRowModel {
         DatabaseRowModel {
             id: entity.id,
             database_id: entity.database_id,
+            uuid: entity.uuid,
         }
     }
 }

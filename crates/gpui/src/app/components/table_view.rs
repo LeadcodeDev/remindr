@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
+use chrono::NaiveDate;
 use gpui::*;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
+    date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, NumberInput},
     menu::{ContextMenuExt as _, PopupMenuItem},
+    popover::Popover,
     scroll::ScrollableElement,
     v_flex,
 };
@@ -25,8 +28,11 @@ pub struct TableView {
     pub key: i64,
     pub database_id: i32,
     cell_inputs: HashMap<(i32, i32), Entity<InputState>>,
+    date_picker_states: HashMap<(i32, i32), Entity<DatePickerState>>,
     editing_column_id: Option<i32>,
     column_label_input: Option<Entity<InputState>>,
+    config_popover_column_id: Option<i32>,
+    config_default_value_input: Option<Entity<InputState>>,
 }
 
 impl TableView {
@@ -35,8 +41,11 @@ impl TableView {
             key,
             database_id,
             cell_inputs: HashMap::new(),
+            date_picker_states: HashMap::new(),
             editing_column_id: None,
             column_label_input: None,
+            config_popover_column_id: None,
+            config_default_value_input: None,
         }
     }
 
@@ -93,57 +102,50 @@ impl TableView {
         cx.subscribe_in(
             &input,
             window,
-            move |this, _input, event: &InputEvent, _window, cx| {
-                match event {
-                    InputEvent::PressEnter { .. } => {
-                        if let Some(input) = &this.column_label_input {
-                            let new_label = input.read(cx).value().to_string();
-                            if !new_label.is_empty() {
-                                let db_repo = cx.global::<RepositoryState>().databases.clone();
-                                let k = key;
-                                let did = database_id;
+            move |this, _input, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    if let Some(input) = &this.column_label_input {
+                        let new_label = input.read(cx).value().to_string();
+                        if !new_label.is_empty() {
+                            let db_repo = cx.global::<RepositoryState>().databases.clone();
+                            let k = key;
+                            let did = database_id;
 
-                                // Read current column data from global state
-                                let column_model =
-                                    cx.read_global::<DatabaseState, _>(|state, _| {
-                                        state
-                                            .opened_views
-                                            .iter()
-                                            .find(|v| v.unique_key() == k)
-                                            .and_then(|v| {
-                                                if let LoadingState::Loaded(data) = &v.state {
-                                                    data.columns
-                                                        .iter()
-                                                        .find(|c| c.id == column_id)
-                                                        .cloned()
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                    });
-
-                                if let Some(mut col) = column_model {
-                                    col.label = new_label;
-                                    cx.spawn(async move |_, cx| {
-                                        db_repo.update_column(col).await?;
-                                        let _ = cx.update(|cx| {
-                                            TableView::reload_into_global(did, cx);
-                                        });
-                                        Ok::<_, anyhow::Error>(())
+                            let column_model = cx.read_global::<DatabaseState, _>(|state, _| {
+                                state
+                                    .opened_views
+                                    .iter()
+                                    .find(|v| v.unique_key() == k)
+                                    .and_then(|v| {
+                                        if let LoadingState::Loaded(data) = &v.state {
+                                            data.columns.iter().find(|c| c.id == column_id).cloned()
+                                        } else {
+                                            None
+                                        }
                                     })
-                                    .detach();
-                                }
+                            });
+
+                            if let Some(mut col) = column_model {
+                                col.label = new_label;
+                                cx.spawn(async move |_, cx| {
+                                    db_repo.update_column(col).await?;
+                                    let _ = cx.update(|cx| {
+                                        TableView::reload_into_global(did, cx);
+                                    });
+                                    Ok::<_, anyhow::Error>(())
+                                })
+                                .detach();
                             }
                         }
-                        this.editing_column_id = None;
-                        this.column_label_input = None;
                     }
-                    InputEvent::Blur => {
-                        this.editing_column_id = None;
-                        this.column_label_input = None;
-                    }
-                    _ => {}
+                    this.editing_column_id = None;
+                    this.column_label_input = None;
                 }
+                InputEvent::Blur => {
+                    this.editing_column_id = None;
+                    this.column_label_input = None;
+                }
+                _ => {}
             },
         )
         .detach();
@@ -179,14 +181,13 @@ impl TableView {
         cx.subscribe_in(
             &input,
             window,
-            move |_this, input_entity, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
+            move |_this, input_entity, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
                     let new_value = input_entity.read(cx).value().to_string();
                     let db_repo = cx.global::<RepositoryState>().databases.clone();
 
                     cx.spawn(async move |_, cx| {
                         db_repo.upsert_cell(row_id, column_id, &new_value).await?;
-                        // Update cells in ALL opened tabs sharing the same database_id
                         let _ = cx.update(|cx| {
                             cx.update_global::<DatabaseState, _>(|state, _| {
                                 for v in state
@@ -204,6 +205,10 @@ impl TableView {
                     })
                     .detach();
                 }
+                InputEvent::PressEnter { .. } => {
+                    window.blur();
+                }
+                _ => {}
             },
         )
         .detach();
@@ -212,9 +217,69 @@ impl TableView {
         input
     }
 
+    fn get_or_create_date_picker(
+        &mut self,
+        row_id: i32,
+        column_id: i32,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<DatePickerState> {
+        if let Some(state) = self.date_picker_states.get(&(row_id, column_id)) {
+            return state.clone();
+        }
+
+        let parsed_date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok();
+
+        let picker = cx.new(|cx| {
+            let mut state = DatePickerState::new(window, cx);
+            if let Some(date) = parsed_date {
+                state.set_date(date, window, cx);
+            }
+            state
+        });
+
+        let did = self.database_id;
+
+        cx.subscribe_in(
+            &picker,
+            window,
+            move |_this, _picker_entity, event: &DatePickerEvent, _window, cx| {
+                let DatePickerEvent::Change(date) = event;
+                let date_str = format!("{}", date);
+                let db_repo = cx.global::<RepositoryState>().databases.clone();
+
+                cx.update_global::<DatabaseState, _>(|state, _| {
+                    for v in state
+                        .opened_views
+                        .iter_mut()
+                        .filter(|v| v.database_id == did)
+                    {
+                        if let LoadingState::Loaded(data) = &mut v.state {
+                            data.cells.insert((row_id, column_id), date_str.clone());
+                        }
+                    }
+                });
+
+                let val = date_str;
+                cx.spawn(async move |_, _cx| {
+                    db_repo.upsert_cell(row_id, column_id, &val).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+                .detach();
+            },
+        )
+        .detach();
+
+        self.date_picker_states
+            .insert((row_id, column_id), picker.clone());
+        picker
+    }
+
     fn render_header(
-        &self,
+        &mut self,
         columns: &[DatabaseColumnModel],
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let header_bg = cx.theme().table_head;
@@ -232,10 +297,37 @@ impl TableView {
             .border_b_1()
             .border_color(border_color);
 
+        // Fixed UUID "id" column header
+        header = header.child(
+            h_flex()
+                .w(px(180.0))
+                .min_w(px(180.0))
+                .h_full()
+                .px_2()
+                .gap_1p5()
+                .items_center()
+                .border_r_1()
+                .border_color(border_color)
+                .child(
+                    Icon::default()
+                        .path("icons/hash.svg")
+                        .size_4()
+                        .text_color(icon_color),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .text_color(text_color.opacity(0.7))
+                        .child("id"),
+                ),
+        );
+
         for col in columns {
             let col_id = col.id;
             let col_label = col.label.clone();
             let col_type = col.column_type.clone();
+            let col_config = col.config.clone();
             let is_editing = self.editing_column_id == Some(col_id);
 
             let type_icon_path = col_type.icon_path();
@@ -270,7 +362,7 @@ impl TableView {
                                 (ColumnType::String, "Text", "icons/type.svg"),
                                 (ColumnType::Int, "Number", "icons/hash.svg"),
                                 (ColumnType::Bool, "Checkbox", "icons/check-square.svg"),
-                                (ColumnType::Select, "Select", "icons/list.svg"),
+                                (ColumnType::Date, "Date", "icons/calendar.svg"),
                             ];
 
                             let mut m = menu;
@@ -291,7 +383,6 @@ impl TableView {
                                                     .clone();
                                                 let new_type = new_type.clone();
 
-                                                // Read current column
                                                 let column_model = cx
                                                     .read_global::<DatabaseState, _>(|state, _| {
                                                         state
@@ -380,6 +471,130 @@ impl TableView {
                 });
             }
 
+            // Column config button (settings icon)
+            let is_config_open = self.config_popover_column_id == Some(col_id);
+            let config_default = col_config.default_value.clone().unwrap_or_default();
+
+            if is_config_open {
+                let default_input = if self.config_default_value_input.is_none() {
+                    let input = cx.new(|cx| {
+                        let mut state = InputState::new(window, cx);
+                        state.set_value(config_default.clone(), window, cx);
+                        state
+                    });
+
+                    let k = view_key;
+                    let did_inner = database_id;
+
+                    cx.subscribe_in(
+                        &input,
+                        window,
+                        move |this, input_entity, event: &InputEvent, _window, cx| match event {
+                            InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                                let new_default = input_entity.read(cx).value().to_string();
+                                let db_repo = cx.global::<RepositoryState>().databases.clone();
+
+                                let column_model =
+                                    cx.read_global::<DatabaseState, _>(|state, _| {
+                                        state
+                                            .opened_views
+                                            .iter()
+                                            .find(|v| v.unique_key() == k)
+                                            .and_then(|v| {
+                                                if let LoadingState::Loaded(data) = &v.state {
+                                                    data.columns
+                                                        .iter()
+                                                        .find(|c| c.id == col_id)
+                                                        .cloned()
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                    });
+
+                                if let Some(mut col) = column_model {
+                                    col.config.default_value = if new_default.is_empty() {
+                                        None
+                                    } else {
+                                        Some(new_default)
+                                    };
+                                    cx.spawn(async move |_, cx| {
+                                        db_repo.update_column(col).await?;
+                                        let _ = cx.update(|cx| {
+                                            TableView::reload_into_global(did_inner, cx);
+                                        });
+                                        Ok::<_, anyhow::Error>(())
+                                    })
+                                    .detach();
+                                }
+
+                                if matches!(event, InputEvent::PressEnter { .. }) {
+                                    this.config_popover_column_id = None;
+                                    this.config_default_value_input = None;
+                                }
+                            }
+                            _ => {}
+                        },
+                    )
+                    .detach();
+
+                    self.config_default_value_input = Some(input.clone());
+                    input
+                } else {
+                    self.config_default_value_input.clone().unwrap()
+                };
+
+                let default_input_for_popover = default_input.clone();
+                cell = cell.child(
+                    Popover::new("col-config-popover")
+                        .trigger(
+                            Button::new(("col-config-btn", col_id as usize))
+                                .icon(Icon::default().path("icons/settings.svg"))
+                                .ghost()
+                                .xsmall()
+                                .cursor_pointer(),
+                        )
+                        .open(true)
+                        .content(move |_, _, _| {
+                            v_flex()
+                                .w(px(220.0))
+                                .p_3()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Column settings"),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(div().text_xs().child("Default value"))
+                                        .child(
+                                            Input::new(&default_input_for_popover)
+                                                .xsmall()
+                                                .text_sm(),
+                                        ),
+                                )
+                        }),
+                );
+            } else {
+                cell = cell.child(
+                    div().opacity(0.0).hover(|el| el.opacity(1.0)).child(
+                        Button::new(("col-config-btn", col_id as usize))
+                            .icon(Icon::default().path("icons/settings.svg"))
+                            .ghost()
+                            .xsmall()
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.config_popover_column_id = Some(col_id);
+                                this.config_default_value_input = None;
+                                cx.notify();
+                            })),
+                    ),
+                );
+            }
+
             header = header.child(cell);
         }
 
@@ -403,7 +618,6 @@ impl TableView {
                             let did = this.database_id;
                             let vid = this.key;
 
-                            // Get next position
                             let next_pos = cx.read_global::<DatabaseState, _>(|state, _| {
                                 state
                                     .opened_views
@@ -445,16 +659,17 @@ impl TableView {
     fn render_rows(
         &mut self,
         columns: &[DatabaseColumnModel],
-        rows: &[(i32, HashMap<i32, String>)],
+        rows: &[(i32, String, HashMap<i32, String>)],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<Div> {
         let border_color = cx.theme().border;
+        let text_color = cx.theme().foreground;
         let database_id = self.database_id;
 
         let mut row_elements = Vec::new();
 
-        for (row_id, row_cells) in rows {
+        for (row_id, row_uuid, row_cells) in rows {
             let row_id = *row_id;
 
             let mut row_el = h_flex()
@@ -462,6 +677,32 @@ impl TableView {
                 .min_h_9()
                 .border_b_1()
                 .border_color(border_color);
+
+            // UUID id column (read-only)
+            let uuid_display = if row_uuid.len() > 8 {
+                &row_uuid[..8]
+            } else {
+                row_uuid.as_str()
+            };
+            row_el = row_el.child(
+                div()
+                    .w(px(180.0))
+                    .min_w(px(180.0))
+                    .h_full()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .border_r_1()
+                    .border_color(border_color)
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(text_color.opacity(0.4))
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .child(uuid_display.to_string()),
+                    ),
+            );
 
             for col in columns {
                 let col_id = col.id;
@@ -492,7 +733,6 @@ impl TableView {
                                         let db_repo =
                                             cx.global::<RepositoryState>().databases.clone();
 
-                                        // Update ALL opened tabs sharing the same database_id
                                         cx.update_global::<DatabaseState, _>(|state, _| {
                                             for v in state
                                                 .opened_views
@@ -518,8 +758,42 @@ impl TableView {
                                 )),
                             )
                     }
-                    _ => {
-                        // Text input for String, Int, Select
+                    ColumnType::Int => {
+                        let input =
+                            self.get_or_create_cell_input(row_id, col_id, &value, window, cx);
+                        div()
+                            .w(px(180.0))
+                            .min_w(px(180.0))
+                            .h_full()
+                            .px_1()
+                            .flex()
+                            .items_center()
+                            .border_r_1()
+                            .border_color(border_color)
+                            .child(NumberInput::new(&input).xsmall().appearance(false))
+                    }
+                    ColumnType::Date => {
+                        let picker =
+                            self.get_or_create_date_picker(row_id, col_id, &value, window, cx);
+                        div()
+                            .w(px(180.0))
+                            .min_w(px(180.0))
+                            .h_full()
+                            .px_1()
+                            .flex()
+                            .items_center()
+                            .border_r_1()
+                            .border_color(border_color)
+                            .child(
+                                DatePicker::new(&picker)
+                                    .xsmall()
+                                    .cleanable(true)
+                                    .appearance(false)
+                                    .number_of_months(1)
+                                    .placeholder("Pick a date"),
+                            )
+                    }
+                    ColumnType::String => {
                         let input =
                             self.get_or_create_cell_input(row_id, col_id, &value, window, cx);
                         div()
@@ -567,8 +841,9 @@ impl TableView {
                                 })
                                 .detach();
 
-                                // Clean up cell inputs for this row
+                                // Clean up cell inputs and date pickers for this row
                                 this.cell_inputs.retain(|(r, _), _| *r != row_id);
+                                this.date_picker_states.retain(|(r, _), _| *r != row_id);
                             })),
                     ),
             );
@@ -610,7 +885,7 @@ impl Render for TableView {
         };
 
         let columns = data.columns.clone();
-        let rows_data: Vec<(i32, HashMap<i32, String>)> = data
+        let rows_data: Vec<(i32, String, HashMap<i32, String>)> = data
             .rows
             .iter()
             .map(|row| {
@@ -625,13 +900,13 @@ impl Render for TableView {
                         (col.id, val)
                     })
                     .collect();
-                (row.id, row_cells)
+                (row.id, row.uuid.clone(), row_cells)
             })
             .collect();
 
         let border_color = cx.theme().border;
 
-        let header = self.render_header(&columns, cx).into_any_element();
+        let header = self.render_header(&columns, window, cx).into_any_element();
         let row_elements = self.render_rows(&columns, &rows_data, window, cx);
 
         v_flex()
