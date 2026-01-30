@@ -8,7 +8,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{ContextMenu, ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
+    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
     scroll::ScrollableElement,
     sidebar::SidebarHeader,
     v_flex,
@@ -18,12 +18,16 @@ use crate::{
     LoadingState,
     app::{
         components::{confirm_dialog::ConfirmDialog, settings_dialog::SettingsDialog},
-        screens::document_screen::DocumentScreen,
+        screens::{database_view_screen::DatabaseViewScreen, document_screen::DocumentScreen},
         states::{
-            app_state::AppState, document_state::DocumentState, repository_state::RepositoryState,
+            app_state::AppState, database_state::DatabaseState, document_state::DocumentState,
+            repository_state::RepositoryState,
         },
     },
-    domain::database::{document::DocumentModel, folder::FolderModel},
+    domain::database::{
+        database_model::DatabaseModel as DbModel, database_view::DatabaseViewModel,
+        document::DocumentModel, folder::FolderModel,
+    },
 };
 
 /// Drag data for a document being dragged in the sidebar
@@ -70,6 +74,8 @@ impl Render for DragGhost {
 enum EditingItem {
     Folder(i32),
     Document(i32),
+    DatabaseView(i32),
+    Database(i32),
 }
 
 /// Represents a tree item in the sidebar
@@ -80,11 +86,14 @@ enum SidebarItem {
         children: Vec<SidebarItem>,
     },
     Document(DocumentModel),
+    DatabaseView(DatabaseViewModel),
 }
 
 pub struct AppSidebar {
     document_state: LoadingState<Vec<DocumentModel>>,
     folder_state: LoadingState<Vec<FolderModel>>,
+    database_list_state: LoadingState<Vec<DbModel>>,
+    database_views_state: LoadingState<Vec<DatabaseViewModel>>,
     expanded_folders: HashSet<i32>,
     drop_target_folder: Option<i32>,
     editing_item: Option<EditingItem>,
@@ -98,18 +107,28 @@ impl AppSidebar {
             let repository_state = cx.global::<RepositoryState>();
             let document_repository = repository_state.documents.clone();
             let folder_repository = repository_state.folders.clone();
+            let database_repository = repository_state.databases.clone();
 
             // Initial fetch
             cx.spawn({
                 let doc_repo = document_repository.clone();
                 let folder_repo = folder_repository.clone();
+                let db_repo = database_repository.clone();
                 async move |this, cx| {
                     let documents = doc_repo.get_documents().await;
                     let folders = folder_repo.get_folders().await;
+                    let databases = db_repo.get_databases().await;
+                    let views = db_repo.get_views().await;
                     if let (Ok(documents), Ok(folders)) = (documents, folders) {
                         let _ = this.update(cx, |state: &mut Self, _| {
                             state.document_state = LoadingState::Loaded(documents);
                             state.folder_state = LoadingState::Loaded(folders);
+                            if let Ok(databases) = databases {
+                                state.database_list_state = LoadingState::Loaded(databases);
+                            }
+                            if let Ok(views) = views {
+                                state.database_views_state = LoadingState::Loaded(views);
+                            }
                         });
                     }
                 }
@@ -120,15 +139,24 @@ impl AppSidebar {
             cx.spawn({
                 let doc_repo = document_repository.clone();
                 let folder_repo = folder_repository.clone();
+                let db_repo = database_repository.clone();
                 async move |this, cx| {
                     loop {
                         smol::Timer::after(Duration::from_secs(5)).await;
                         let documents = doc_repo.get_documents().await;
                         let folders = folder_repo.get_folders().await;
+                        let databases = db_repo.get_databases().await;
+                        let views = db_repo.get_views().await;
                         if let (Ok(documents), Ok(folders)) = (documents, folders) {
                             let result = this.update(cx, |state: &mut Self, _| {
                                 state.document_state = LoadingState::Loaded(documents);
                                 state.folder_state = LoadingState::Loaded(folders);
+                                if let Ok(databases) = databases {
+                                    state.database_list_state = LoadingState::Loaded(databases);
+                                }
+                                if let Ok(views) = views {
+                                    state.database_views_state = LoadingState::Loaded(views);
+                                }
                             });
                             if result.is_err() {
                                 break;
@@ -142,6 +170,8 @@ impl AppSidebar {
             Self {
                 document_state: LoadingState::Loading,
                 folder_state: LoadingState::Loading,
+                database_list_state: LoadingState::Loading,
+                database_views_state: LoadingState::Loading,
                 expanded_folders: HashSet::new(),
                 drop_target_folder: None,
                 editing_item: None,
@@ -249,6 +279,7 @@ impl AppSidebar {
 
         let doc_repo = cx.global::<RepositoryState>().documents.clone();
         let folder_repo = cx.global::<RepositoryState>().folders.clone();
+        let db_repo = cx.global::<RepositoryState>().databases.clone();
         let this = cx.entity().clone();
 
         match editing {
@@ -282,6 +313,36 @@ impl AppSidebar {
                 })
                 .detach();
             }
+            EditingItem::DatabaseView(id) => {
+                cx.spawn(async move |_this, cx| {
+                    let view = db_repo.get_view_by_id(id).await?;
+                    let updated = DatabaseViewModel {
+                        name: new_name,
+                        ..view
+                    };
+                    db_repo.update_view(updated).await?;
+                    let _ = cx.update(|cx| {
+                        AppSidebar::refresh_data(&this, cx);
+                    });
+                    Ok::<_, anyhow::Error>(())
+                })
+                .detach();
+            }
+            EditingItem::Database(id) => {
+                cx.spawn(async move |_this, cx| {
+                    let db = db_repo.get_database_by_id(id).await?;
+                    let updated = DbModel {
+                        name: new_name,
+                        ..db
+                    };
+                    db_repo.update_database(updated).await?;
+                    let _ = cx.update(|cx| {
+                        AppSidebar::refresh_data(&this, cx);
+                    });
+                    Ok::<_, anyhow::Error>(())
+                })
+                .detach();
+            }
         }
     }
 
@@ -290,18 +351,23 @@ impl AppSidebar {
         self.rename_input = None;
     }
 
-    /// Build a tree structure from flat lists of folders and documents
-    fn build_tree(folders: &[FolderModel], documents: &[DocumentModel]) -> Vec<SidebarItem> {
+    /// Build a tree structure from flat lists of folders, documents, and database views
+    fn build_tree(
+        folders: &[FolderModel],
+        documents: &[DocumentModel],
+        views: &[DatabaseViewModel],
+    ) -> Vec<SidebarItem> {
         fn build_children(
             parent_id: Option<i32>,
             folders: &[FolderModel],
             documents: &[DocumentModel],
+            views: &[DatabaseViewModel],
         ) -> Vec<SidebarItem> {
             let mut items = Vec::new();
 
             // Add child folders first
             for folder in folders.iter().filter(|f| f.parent_id == parent_id) {
-                let children = build_children(Some(folder.id), folders, documents);
+                let children = build_children(Some(folder.id), folders, documents, views);
                 items.push(SidebarItem::Folder {
                     model: folder.clone(),
                     children,
@@ -313,24 +379,38 @@ impl AppSidebar {
                 items.push(SidebarItem::Document(doc.clone()));
             }
 
+            // Then add database views
+            for view in views.iter().filter(|v| v.folder_id == parent_id) {
+                items.push(SidebarItem::DatabaseView(view.clone()));
+            }
+
             items
         }
 
-        build_children(None, folders, documents)
+        build_children(None, folders, documents, views)
     }
 
     fn refresh_data(this: &Entity<Self>, cx: &mut App) {
         let doc_repo = cx.global::<RepositoryState>().documents.clone();
         let folder_repo = cx.global::<RepositoryState>().folders.clone();
+        let db_repo = cx.global::<RepositoryState>().databases.clone();
         let this = this.clone();
 
         cx.spawn(async move |cx| {
             let documents = doc_repo.get_documents().await?;
             let folders = folder_repo.get_folders().await?;
+            let databases = db_repo.get_databases().await;
+            let views = db_repo.get_views().await;
 
             let _ = this.update(cx, |state, _| {
                 state.document_state = LoadingState::Loaded(documents);
                 state.folder_state = LoadingState::Loaded(folders);
+                if let Ok(databases) = databases {
+                    state.database_list_state = LoadingState::Loaded(databases);
+                }
+                if let Ok(views) = views {
+                    state.database_views_state = LoadingState::Loaded(views);
+                }
             });
 
             Ok::<_, anyhow::Error>(())
@@ -362,7 +442,17 @@ impl Render for AppSidebar {
             _ => vec![],
         };
 
-        let tree = Self::build_tree(&folders, &documents);
+        let views = match &self.database_views_state {
+            LoadingState::Loaded(views) => views.clone(),
+            _ => vec![],
+        };
+
+        let databases = match &self.database_list_state {
+            LoadingState::Loaded(dbs) => dbs.clone(),
+            _ => vec![],
+        };
+
+        let tree = Self::build_tree(&folders, &documents, &views);
         let expanded_folders = self.expanded_folders.clone();
         let drop_target_folder = self.drop_target_folder;
         let editing_item = self.editing_item;
@@ -485,6 +575,7 @@ impl Render for AppSidebar {
             &this,
             &app_state,
             &folders,
+            &databases,
             item_text_color,
             icon_color,
             accent_bg,
@@ -496,6 +587,7 @@ impl Render for AppSidebar {
             let this_ctx = this.clone();
             let this_cancel = this.clone();
             let app_state_ctx = app_state.clone();
+            let databases_for_ctx = databases.clone();
             div()
                 .id("root-drop-zone")
                 .w_full()
@@ -527,74 +619,377 @@ impl Render for AppSidebar {
                     .detach();
                 })
                 .context_menu({
-                    move |menu, _window, _cx| {
-                        menu.item(
-                            PopupMenuItem::new("New document")
-                                .icon(Icon::default().path("icons/file-text.svg"))
-                                .on_click({
-                                    let this = this_ctx.clone();
-                                    let app_state = app_state_ctx.clone();
-                                    move |_, _, cx| {
-                                        let repository =
-                                            cx.global::<RepositoryState>().documents.clone();
-                                        let this_clone = this.clone();
-                                        let app_state = app_state.clone();
+                    move |mut menu, _window, _cx| {
+                        menu = menu
+                            .item(
+                                PopupMenuItem::new("New document")
+                                    .icon(Icon::default().path("icons/file-text.svg"))
+                                    .on_click({
+                                        let this = this_ctx.clone();
+                                        let app_state = app_state_ctx.clone();
+                                        move |_, _, cx| {
+                                            let repository =
+                                                cx.global::<RepositoryState>().documents.clone();
+                                            let this_clone = this.clone();
+                                            let app_state = app_state.clone();
 
-                                        cx.spawn(async move |cx| {
-                                            let new_document = DocumentModel {
-                                                id: 0,
-                                                title: "Untitled".to_string(),
-                                                content: serde_json::json!([]),
-                                                folder_id: None,
-                                            };
-                                            let new_id =
-                                                repository.insert_document(new_document).await?;
-                                            let _ = cx.update(|cx: &mut App| {
-                                                AppSidebar::refresh_data(&this_clone, cx);
-                                                cx.update_global::<DocumentState, _>(|state, _| {
-                                                    state.open_document(
-                                                        new_id,
-                                                        "Untitled".to_string(),
+                                            cx.spawn(async move |cx| {
+                                                let new_document = DocumentModel {
+                                                    id: 0,
+                                                    title: "Untitled".to_string(),
+                                                    content: serde_json::json!([]),
+                                                    folder_id: None,
+                                                };
+                                                let new_id = repository
+                                                    .insert_document(new_document)
+                                                    .await?;
+                                                let _ = cx.update(|cx: &mut App| {
+                                                    AppSidebar::refresh_data(&this_clone, cx);
+                                                    cx.update_global::<DocumentState, _>(
+                                                        |state, _| {
+                                                            state.open_document(
+                                                                new_id,
+                                                                "Untitled".to_string(),
+                                                            );
+                                                        },
                                                     );
+                                                    app_state.update(cx, |app_state, cx| {
+                                                        let document_screen =
+                                                            DocumentScreen::new(cx.weak_entity());
+                                                        app_state
+                                                            .navigator
+                                                            .push(document_screen, cx);
+                                                    });
                                                 });
-                                                app_state.update(cx, |app_state, cx| {
-                                                    let document_screen =
-                                                        DocumentScreen::new(cx.weak_entity());
-                                                    app_state.navigator.push(document_screen, cx);
-                                                });
-                                            });
-                                            Ok::<_, anyhow::Error>(())
-                                        })
-                                        .detach();
-                                    }
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new("New folder")
-                                .icon(Icon::new(IconName::Folder))
-                                .on_click({
-                                    let this = this_ctx.clone();
-                                    move |_, _, cx| {
-                                        let folder_repo =
-                                            cx.global::<RepositoryState>().folders.clone();
-                                        let this_clone = this.clone();
+                                                Ok::<_, anyhow::Error>(())
+                                            })
+                                            .detach();
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("New folder")
+                                    .icon(Icon::new(IconName::Folder))
+                                    .on_click({
+                                        let this = this_ctx.clone();
+                                        move |_, _, cx| {
+                                            let folder_repo =
+                                                cx.global::<RepositoryState>().folders.clone();
+                                            let this_clone = this.clone();
 
-                                        cx.spawn(async move |cx| {
-                                            folder_repo
-                                                .insert_folder("Untitled".to_string(), None)
-                                                .await?;
-                                            let _ = cx.update(|cx| {
-                                                AppSidebar::refresh_data(&this_clone, cx);
-                                            });
-                                            Ok::<_, anyhow::Error>(())
-                                        })
-                                        .detach();
-                                    }
-                                }),
-                        )
+                                            cx.spawn(async move |cx| {
+                                                folder_repo
+                                                    .insert_folder("Untitled".to_string(), None)
+                                                    .await?;
+                                                let _ = cx.update(|cx| {
+                                                    AppSidebar::refresh_data(&this_clone, cx);
+                                                });
+                                                Ok::<_, anyhow::Error>(())
+                                            })
+                                            .detach();
+                                        }
+                                    }),
+                            );
+
+                        // Add "New database view" submenu if databases exist
+                        if !databases_for_ctx.is_empty() {
+                            menu = menu.separator();
+                            for db in &databases_for_ctx {
+                                let db_id = db.id;
+                                let db_name = db.name.clone();
+                                let this = this_ctx.clone();
+                                let app_state = app_state_ctx.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(format!("New view: {}", db_name))
+                                        .icon(Icon::default().path("icons/table.svg"))
+                                        .on_click(move |_, _, cx| {
+                                            let db_repo =
+                                                cx.global::<RepositoryState>().databases.clone();
+                                            let this_clone = this.clone();
+                                            let app_state = app_state.clone();
+
+                                            cx.spawn(async move |cx| {
+                                                let view_id = db_repo
+                                                    .insert_view(
+                                                        db_id,
+                                                        "Table View".to_string(),
+                                                        "table",
+                                                        None,
+                                                    )
+                                                    .await?;
+
+                                                let _ = cx.update(|cx: &mut App| {
+                                                    AppSidebar::refresh_data(&this_clone, cx);
+                                                    cx.update_global::<DatabaseState, _>(
+                                                        |state, _| {
+                                                            state.open_view(
+                                                                view_id,
+                                                                "Table View".to_string(),
+                                                                db_id,
+                                                            );
+                                                        },
+                                                    );
+                                                    app_state.update(cx, |app_state, cx| {
+                                                        let screen = DatabaseViewScreen::new(
+                                                            cx.weak_entity(),
+                                                        );
+                                                        app_state.navigator.push(screen, cx);
+                                                    });
+                                                });
+                                                Ok::<_, anyhow::Error>(())
+                                            })
+                                            .detach();
+                                        }),
+                                );
+                            }
+                        }
+
+                        menu
                     }
                 })
         };
+
+        // Databases section at the bottom
+        let databases_header = h_flex()
+            .flex_shrink_0()
+            .px_2()
+            .rounded(radius)
+            .text_xs()
+            .text_color(header_text_color)
+            .h_8()
+            .justify_between()
+            .items_center()
+            .child("Databases")
+            .child(
+                h_flex().gap_1().child(
+                    Button::new("create-database")
+                        .icon(Icon::new(IconName::Plus))
+                        .ghost()
+                        .xsmall()
+                        .cursor_pointer()
+                        .tooltip("New database")
+                        .on_click({
+                            let this = this.clone();
+                            move |_, _, cx| {
+                                let db_repo = cx.global::<RepositoryState>().databases.clone();
+                                let this_clone = this.clone();
+
+                                cx.spawn(async move |cx| {
+                                    db_repo.insert_database("Untitled".to_string()).await?;
+                                    let _ = cx.update(|cx| {
+                                        AppSidebar::refresh_data(&this_clone, cx);
+                                    });
+                                    Ok::<_, anyhow::Error>(())
+                                })
+                                .detach();
+                            }
+                        }),
+                ),
+            );
+
+        let database_items: Vec<_> = databases
+            .iter()
+            .map(|db| {
+                let db_id = db.id;
+                let db_name = db.name.clone();
+                let delete_name = db.name.clone();
+                let this_item = this.clone();
+                let app_state_db = app_state.clone();
+
+                h_flex()
+                    .id(("database-item", db_id as usize))
+                    .w_full()
+                    .h_7()
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|el| el.bg(accent_bg))
+                    .on_click({
+                        let app_state = app_state_db.clone();
+                        let db_name = db_name.clone();
+                        move |_, _, cx| {
+                            cx.update_global::<DatabaseState, _>(|state, _| {
+                                state.open_source(db_id, db_name.clone());
+                            });
+
+                            app_state.update(cx, |app_state, cx| {
+                                let screen = DatabaseViewScreen::new(cx.weak_entity());
+                                app_state.navigator.push(screen, cx);
+                            });
+                        }
+                    })
+                    .child(
+                        Icon::default()
+                            .path("icons/database.svg")
+                            .size_4()
+                            .text_color(icon_color),
+                    )
+                    .child({
+                        let is_editing = editing_item == Some(EditingItem::Database(db_id));
+                        if is_editing {
+                            let this_esc = this_item.clone();
+                            div()
+                                .flex_1()
+                                .mx_neg_1()
+                                .on_key_down(move |event, _, cx| {
+                                    if event.keystroke.key.as_str() == "escape" {
+                                        cx.stop_propagation();
+                                        this_esc.update(cx, |state, cx| {
+                                            state.cancel_rename(cx);
+                                        });
+                                    }
+                                })
+                                .child(
+                                    Input::new(rename_input.as_ref().unwrap())
+                                        .xsmall()
+                                        .appearance(false)
+                                        .text_sm(),
+                                )
+                        } else {
+                            let this_dbl = this_item.clone();
+                            let name_for_dbl = db_name.clone();
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .text_ellipsis()
+                                .overflow_hidden()
+                                .text_color(item_text_color)
+                                .child(db_name.clone())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event, window, cx| {
+                                        if event.click_count == 2 {
+                                            cx.stop_propagation();
+                                            this_dbl.update(cx, |state, cx| {
+                                                state.start_rename(
+                                                    EditingItem::Database(db_id),
+                                                    &name_for_dbl,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    },
+                                )
+                        }
+                    })
+                    .child(
+                        div()
+                            .opacity(0.0)
+                            .hover(|el| el.opacity(1.0))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .child(
+                                Button::new(("delete-db", db_id as usize))
+                                    .icon(Icon::default().path("icons/trash-2.svg"))
+                                    .danger()
+                                    .xsmall()
+                                    .cursor_pointer()
+                                    .on_click({
+                                        let this_del = this_item.clone();
+                                        move |_, window, cx| {
+                                            let this_clone = this_del.clone();
+                                            let delete_name = delete_name.clone();
+
+                                            ConfirmDialog::new("Delete Database")
+                                                .message(format!(
+                                                    "Are you sure you want to delete \"{}\"? All views and data will be lost.",
+                                                    delete_name
+                                                ))
+                                                .confirm_text("Delete")
+                                                .cancel_text("Cancel")
+                                                .danger()
+                                                .on_confirm(move |window, cx| {
+                                                    let db_repo = cx.global::<RepositoryState>().databases.clone();
+                                                    let this_spawn = this_clone.clone();
+                                                    window.push_notification(
+                                                        format!("\"{}\" has been deleted", delete_name),
+                                                        cx,
+                                                    );
+                                                    cx.spawn(async move |cx| {
+                                                        let _ = db_repo.delete_database(db_id).await;
+                                                        let _ = cx.update(|cx| {
+                                                            AppSidebar::refresh_data(&this_spawn, cx);
+                                                        });
+                                                        Ok::<_, anyhow::Error>(())
+                                                    })
+                                                    .detach();
+                                                    true
+                                                })
+                                                .open(window, cx);
+                                        }
+                                    }),
+                            ),
+                    )
+                    .context_menu({
+                        let this_ctx = this_item.clone();
+                        let db_name_ctx = db.name.clone();
+                        move |menu, _window, _cx| {
+                            menu.item(
+                                PopupMenuItem::new("Rename")
+                                    .icon(Icon::default().path("icons/pencil-line.svg"))
+                                    .on_click({
+                                        let this = this_ctx.clone();
+                                        let name = db_name_ctx.clone();
+                                        move |_, window, cx| {
+                                            this.update(cx, |state, cx| {
+                                                state.start_rename(
+                                                    EditingItem::Database(db_id),
+                                                    &name,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    }),
+                            )
+                            .separator()
+                            .item(
+                                PopupMenuItem::new("Delete")
+                                    .icon(Icon::default().path("icons/trash-2.svg"))
+                                    .on_click({
+                                        let this = this_ctx.clone();
+                                        let name = db_name_ctx.clone();
+                                        move |_, window, cx| {
+                                            let this_clone = this.clone();
+                                            let delete_name = name.clone();
+
+                                            ConfirmDialog::new("Delete Database")
+                                                .message(format!(
+                                                    "Are you sure you want to delete \"{}\"? All views and data will be lost.",
+                                                    delete_name
+                                                ))
+                                                .confirm_text("Delete")
+                                                .cancel_text("Cancel")
+                                                .danger()
+                                                .on_confirm(move |window, cx| {
+                                                    let db_repo = cx.global::<RepositoryState>().databases.clone();
+                                                    let this_spawn = this_clone.clone();
+                                                    window.push_notification(
+                                                        format!("\"{}\" has been deleted", delete_name),
+                                                        cx,
+                                                    );
+                                                    cx.spawn(async move |cx| {
+                                                        let _ = db_repo.delete_database(db_id).await;
+                                                        let _ = cx.update(|cx| {
+                                                            AppSidebar::refresh_data(&this_spawn, cx);
+                                                        });
+                                                        Ok::<_, anyhow::Error>(())
+                                                    })
+                                                    .detach();
+                                                    true
+                                                })
+                                                .open(window, cx);
+                                        }
+                                    }),
+                            )
+                        }
+                    })
+            })
+            .collect();
 
         v_flex()
             .h_full()
@@ -615,6 +1010,19 @@ impl Render for AppSidebar {
                     .children(items)
                     .child(root_drop_zone),
             )
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(border_color)
+                    .child(databases_header)
+                    .child(
+                        div()
+                            .px_1()
+                            .max_h(px(200.0))
+                            .overflow_y_scrollbar()
+                            .children(database_items),
+                    ),
+            )
     }
 }
 
@@ -629,10 +1037,11 @@ fn render_tree_items(
     this: &Entity<AppSidebar>,
     app_state: &Entity<AppState>,
     all_folders: &[FolderModel],
+    all_databases: &[DbModel],
     item_text_color: Hsla,
     icon_color: Hsla,
     accent_bg: Hsla,
-) -> Vec<ContextMenu<Stateful<Div>>> {
+) -> Vec<AnyElement> {
     let mut elements = Vec::new();
 
     for item in items {
@@ -880,8 +1289,9 @@ fn render_tree_items(
                         let app_state = app_state.clone();
                         let folder_name = model.name.clone();
                         let _folder_parent_id = model.parent_id;
+                        let databases_for_folder = all_databases.to_vec();
                         move |menu, _window, _cx| {
-                            menu.item(
+                            let mut menu = menu.item(
                                 PopupMenuItem::new("New document")
                                     .icon(Icon::default().path("icons/file-text.svg"))
                                     .on_click({
@@ -935,7 +1345,50 @@ fn render_tree_items(
                                             .detach();
                                         }
                                     }),
-                            )
+                            );
+
+                            // Add "New database view" submenu for databases
+                            if !databases_for_folder.is_empty() {
+                                menu = menu.separator();
+                                for db in &databases_for_folder {
+                                    let db_id = db.id;
+                                    let db_name = db.name.clone();
+                                    let this = this.clone();
+                                    let app_state = app_state.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(format!("New view: {}", db_name))
+                                            .icon(Icon::default().path("icons/table.svg"))
+                                            .on_click(move |_, _, cx| {
+                                                let db_repo = cx.global::<RepositoryState>().databases.clone();
+                                                let this_clone = this.clone();
+                                                let app_state = app_state.clone();
+
+                                                cx.spawn(async move |cx| {
+                                                    let view_id = db_repo.insert_view(
+                                                        db_id,
+                                                        "Table View".to_string(),
+                                                        "table",
+                                                        Some(folder_id),
+                                                    ).await?;
+
+                                                    let _ = cx.update(|cx: &mut App| {
+                                                        AppSidebar::refresh_data(&this_clone, cx);
+                                                        cx.update_global::<DatabaseState, _>(|state, _| {
+                                                            state.open_view(view_id, "Table View".to_string(), db_id);
+                                                        });
+                                                        app_state.update(cx, |app_state, cx| {
+                                                            let screen = DatabaseViewScreen::new(cx.weak_entity());
+                                                            app_state.navigator.push(screen, cx);
+                                                        });
+                                                    });
+                                                    Ok::<_, anyhow::Error>(())
+                                                }).detach();
+                                            }),
+                                    );
+                                }
+                            }
+
+                            menu
                             .separator()
                             .item(
                                 PopupMenuItem::new("Rename")
@@ -1022,7 +1475,7 @@ fn render_tree_items(
                         }
                     });
 
-                elements.push(folder_row);
+                elements.push(folder_row.into_any_element());
 
                 // Render children if expanded
                 if is_expanded {
@@ -1036,6 +1489,7 @@ fn render_tree_items(
                         this,
                         app_state,
                         all_folders,
+                        all_databases,
                         item_text_color,
                         icon_color,
                         accent_bg,
@@ -1365,7 +1819,228 @@ fn render_tree_items(
                         }
                     });
 
-                elements.push(doc_row);
+                elements.push(doc_row.into_any_element());
+            }
+            SidebarItem::DatabaseView(view) => {
+                let view_id = view.id;
+                let view_name = view.name.clone();
+                let view_db_id = view.database_id;
+                let delete_name = view.name.clone();
+                let this_clone = this.clone();
+                let app_state_clone = app_state.clone();
+
+                let view_row = h_flex()
+                    .id(("db-view-item", view_id as usize))
+                    .w_full()
+                    .h_7()
+                    .px_2()
+                    .pl(px(8.0 + (depth as f32) * 16.0))
+                    .gap_2()
+                    .items_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|el| el.bg(accent_bg))
+                    .on_click({
+                        let view_name = view_name.clone();
+                        let app_state = app_state_clone.clone();
+                        move |_, _, cx| {
+                            cx.update_global::<DatabaseState, _>(|state, _| {
+                                state.open_view(view_id, view_name.clone(), view_db_id);
+                            });
+
+                            app_state.update(cx, |app_state, cx| {
+                                let screen = DatabaseViewScreen::new(cx.weak_entity());
+                                app_state.navigator.push(screen, cx);
+                            });
+                        }
+                    })
+                    .child(
+                        Icon::default()
+                            .path("icons/table.svg")
+                            .size_4()
+                            .text_color(icon_color),
+                    )
+                    .child({
+                        let is_editing = editing_item == Some(EditingItem::DatabaseView(view_id));
+                        if is_editing {
+                            let this_esc = this.clone();
+                            div()
+                                .flex_1()
+                                .mx_neg_1()
+                                .on_key_down(move |event, _, cx| {
+                                    if event.keystroke.key.as_str() == "escape" {
+                                        cx.stop_propagation();
+                                        this_esc.update(cx, |state, cx| {
+                                            state.cancel_rename(cx);
+                                        });
+                                    }
+                                })
+                                .child(
+                                    Input::new(rename_input.as_ref().unwrap())
+                                        .xsmall()
+                                        .appearance(false)
+                                        .text_sm(),
+                                )
+                        } else {
+                            let this_dbl = this.clone();
+                            let name_for_dbl = view_name.clone();
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .text_ellipsis()
+                                .overflow_hidden()
+                                .text_color(item_text_color)
+                                .child(view.name.clone())
+                                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                    if event.click_count == 2 {
+                                        cx.stop_propagation();
+                                        this_dbl.update(cx, |state, cx| {
+                                            state.start_rename(
+                                                EditingItem::DatabaseView(view_id),
+                                                &name_for_dbl,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
+                        }
+                    })
+                    .child(
+                        div()
+                            .opacity(0.0)
+                            .hover(|el| el.opacity(1.0))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .child(
+                                Button::new(("delete-view", view_id as usize))
+                                    .icon(Icon::default().path("icons/trash-2.svg"))
+                                    .danger()
+                                    .xsmall()
+                                    .cursor_pointer()
+                                    .on_click({
+                                        let this = this_clone.clone();
+                                        move |_, window, cx| {
+                                            let this_clone = this.clone();
+                                            let delete_name = delete_name.clone();
+
+                                            ConfirmDialog::new("Delete View")
+                                                .message(format!(
+                                                    "Are you sure you want to delete \"{}\"?",
+                                                    delete_name
+                                                ))
+                                                .confirm_text("Delete")
+                                                .cancel_text("Cancel")
+                                                .danger()
+                                                .on_confirm(move |window, cx| {
+                                                    let db_repo = cx
+                                                        .global::<RepositoryState>()
+                                                        .databases
+                                                        .clone();
+                                                    let this_spawn = this_clone.clone();
+                                                    window.push_notification(
+                                                        format!(
+                                                            "\"{}\" has been deleted",
+                                                            delete_name
+                                                        ),
+                                                        cx,
+                                                    );
+                                                    cx.spawn(async move |cx| {
+                                                        let _ = db_repo.delete_view(view_id).await;
+                                                        let _ = cx.update(|cx| {
+                                                            AppSidebar::refresh_data(
+                                                                &this_spawn,
+                                                                cx,
+                                                            );
+                                                        });
+                                                        Ok::<_, anyhow::Error>(())
+                                                    })
+                                                    .detach();
+                                                    true
+                                                })
+                                                .open(window, cx);
+                                        }
+                                    }),
+                            ),
+                    )
+                    .context_menu({
+                        let this = this.clone();
+                        let view_name_ctx = view_name.clone();
+                        let delete_name2 = view.name.clone();
+                        let this_clone2 = this_clone.clone();
+                        move |menu, _window, _cx| {
+                            menu.item(
+                                PopupMenuItem::new("Rename")
+                                    .icon(Icon::default().path("icons/pencil-line.svg"))
+                                    .on_click({
+                                        let this = this.clone();
+                                        let name = view_name_ctx.clone();
+                                        move |_, window, cx| {
+                                            this.update(cx, |state, cx| {
+                                                state.start_rename(
+                                                    EditingItem::DatabaseView(view_id),
+                                                    &name,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    }),
+                            )
+                            .separator()
+                            .item(
+                                PopupMenuItem::new("Delete")
+                                    .icon(Icon::default().path("icons/trash-2.svg"))
+                                    .on_click({
+                                        let this = this_clone2.clone();
+                                        let name = delete_name2.clone();
+                                        move |_, window, cx| {
+                                            let this_clone = this.clone();
+                                            let delete_name = name.clone();
+
+                                            ConfirmDialog::new("Delete View")
+                                                .message(format!(
+                                                    "Are you sure you want to delete \"{}\"?",
+                                                    delete_name
+                                                ))
+                                                .confirm_text("Delete")
+                                                .cancel_text("Cancel")
+                                                .danger()
+                                                .on_confirm(move |window, cx| {
+                                                    let db_repo = cx
+                                                        .global::<RepositoryState>()
+                                                        .databases
+                                                        .clone();
+                                                    let this_spawn = this_clone.clone();
+                                                    window.push_notification(
+                                                        format!(
+                                                            "\"{}\" has been deleted",
+                                                            delete_name
+                                                        ),
+                                                        cx,
+                                                    );
+                                                    cx.spawn(async move |cx| {
+                                                        let _ = db_repo.delete_view(view_id).await;
+                                                        let _ = cx.update(|cx| {
+                                                            AppSidebar::refresh_data(
+                                                                &this_spawn,
+                                                                cx,
+                                                            );
+                                                        });
+                                                        Ok::<_, anyhow::Error>(())
+                                                    })
+                                                    .detach();
+                                                    true
+                                                })
+                                                .open(window, cx);
+                                        }
+                                    }),
+                            )
+                        }
+                    });
+
+                elements.push(view_row.into_any_element());
             }
         }
     }

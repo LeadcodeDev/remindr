@@ -15,12 +15,13 @@ use remindr_gpui::{
         remindr::Remindr,
         screens::AppRouter,
         states::{
-            document_state::DocumentState, repository_state::RepositoryState,
-            settings_state::Settings,
+            database_state::DatabaseState, document_state::DocumentState,
+            repository_state::RepositoryState, settings_state::Settings,
         },
     },
     infrastructure::repositories::{
-        document_repository::DocumentRepository, folder_repository::FolderRepository,
+        database_repository::DatabaseRepository, document_repository::DocumentRepository,
+        folder_repository::FolderRepository,
     },
 };
 use rust_embed::RustEmbed;
@@ -132,9 +133,11 @@ async fn main() -> Result<(), Error> {
         cx.set_global(RepositoryState {
             documents: DocumentRepository::new(pool.clone()),
             folders: FolderRepository::new(pool.clone()),
+            databases: DatabaseRepository::new(pool.clone()),
         });
 
         cx.set_global(DocumentState::default());
+        cx.set_global(DatabaseState::default());
         cx.activate(true);
 
         let window = open_main_window(cx).expect("failed to open window");

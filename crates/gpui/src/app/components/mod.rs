@@ -7,4 +7,5 @@ pub mod rich_text;
 pub mod settings_dialog;
 pub mod sidebar;
 pub mod slash_menu;
+pub mod table_view;
 pub mod title_bar;

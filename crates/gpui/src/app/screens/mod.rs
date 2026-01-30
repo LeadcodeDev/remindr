@@ -7,6 +7,7 @@ use crate::app::{
     states::{app_state::AppState, settings_state::Settings},
 };
 
+pub mod database_view_screen;
 pub mod document_screen;
 pub mod home_screen;
 pub mod login_screen;
