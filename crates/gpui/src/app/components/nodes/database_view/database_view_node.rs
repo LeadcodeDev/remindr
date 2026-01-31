@@ -166,8 +166,9 @@ impl DatabaseViewNode {
         cx.spawn(async move |this, cx| {
             let databases = db_repo.get_databases().await?;
             let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, _cx| {
+                let _ = this.update(cx, |this, cx| {
                     this.available_databases = databases;
+                    cx.notify();
                 });
             });
             Ok::<_, anyhow::Error>(())

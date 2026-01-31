@@ -70,7 +70,8 @@ pub struct TableView {
     pub database_id: i32,
     pub view_id: i32,
     pub kind: DatabaseTabKind,
-    cell_inputs: HashMap<(i32, i32), Entity<InputState>>,
+    editing_cell: Option<(i32, i32)>,
+    editing_cell_input: Option<Entity<InputState>>,
     date_picker_states: HashMap<(i32, i32), Entity<DatePickerState>>,
     editing_column_id: Option<i32>,
     column_label_input: Option<Entity<InputState>>,
@@ -87,7 +88,8 @@ impl TableView {
             database_id,
             view_id,
             kind,
-            cell_inputs: HashMap::new(),
+            editing_cell: None,
+            editing_cell_input: None,
             date_picker_states: HashMap::new(),
             editing_column_id: None,
             column_label_input: None,
@@ -255,18 +257,14 @@ impl TableView {
         self.column_label_input = Some(input);
     }
 
-    fn get_or_create_cell_input(
+    fn start_cell_edit(
         &mut self,
         row_id: i32,
         column_id: i32,
         value: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        if let Some(input) = self.cell_inputs.get(&(row_id, column_id)) {
-            return input.clone();
-        }
-
+    ) {
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
             state.set_value(value.to_string(), window, cx);
@@ -278,26 +276,13 @@ impl TableView {
         cx.subscribe_in(
             &input,
             window,
-            move |_this, input_entity, event: &InputEvent, window, cx| match event {
+            move |this, input_entity, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
                     let new_value = input_entity.read(cx).value().to_string();
                     let db_repo = cx.global::<RepositoryState>().databases.clone();
 
-                    cx.spawn(async move |_, cx| {
+                    cx.spawn(async move |_, _cx| {
                         db_repo.upsert_cell(row_id, column_id, &new_value).await?;
-                        let _ = cx.update(|cx| {
-                            cx.update_global::<DatabaseState, _>(|state, _| {
-                                for v in state
-                                    .opened_views
-                                    .iter_mut()
-                                    .filter(|v| v.database_id == did)
-                                {
-                                    if let LoadingState::Loaded(data) = &mut v.state {
-                                        data.cells.insert((row_id, column_id), new_value.clone());
-                                    }
-                                }
-                            });
-                        });
                         Ok::<_, anyhow::Error>(())
                     })
                     .detach();
@@ -305,13 +290,46 @@ impl TableView {
                 InputEvent::PressEnter { .. } => {
                     window.blur();
                 }
+                InputEvent::Blur => {
+                    let final_value = input_entity.read(cx).value().to_string();
+                    let db_repo = cx.global::<RepositoryState>().databases.clone();
+
+                    cx.update_global::<DatabaseState, _>(|state, _| {
+                        for v in state
+                            .opened_views
+                            .iter_mut()
+                            .filter(|v| v.database_id == did)
+                        {
+                            if let LoadingState::Loaded(data) = &mut v.state {
+                                data.cells.insert((row_id, column_id), final_value.clone());
+                            }
+                        }
+                    });
+
+                    // Also persist to DB in case Change didn't fire
+                    let val = final_value;
+                    cx.spawn(async move |_, _cx| {
+                        db_repo.upsert_cell(row_id, column_id, &val).await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                    .detach();
+
+                    this.editing_cell = None;
+                    this.editing_cell_input = None;
+                    cx.notify();
+                }
                 _ => {}
             },
         )
         .detach();
 
-        self.cell_inputs.insert((row_id, column_id), input.clone());
-        input
+        input.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+
+        self.editing_cell = Some((row_id, column_id));
+        self.editing_cell_input = Some(input);
+        cx.notify();
     }
 
     fn get_or_create_date_picker(
@@ -954,20 +972,53 @@ impl TableView {
                                     },
                                 )),
                             )
+                            .into_any_element()
                     }
                     ColumnType::Int => {
-                        let input =
-                            self.get_or_create_cell_input(row_id, col_id, &value, window, cx);
-                        div()
-                            .w(px(180.0))
-                            .min_w(px(180.0))
-                            .h_full()
-                            .px_1()
-                            .flex()
-                            .items_center()
-                            .border_r_1()
-                            .border_color(border_color)
-                            .child(NumberInput::new(&input).xsmall().appearance(false))
+                        let is_editing = self.editing_cell == Some((row_id, col_id));
+                        if is_editing {
+                            if let Some(ref input) = self.editing_cell_input {
+                                div()
+                                    .w(px(180.0))
+                                    .min_w(px(180.0))
+                                    .h_full()
+                                    .px_1()
+                                    .flex()
+                                    .items_center()
+                                    .border_r_1()
+                                    .border_color(border_color)
+                                    .child(NumberInput::new(input).xsmall().appearance(false))
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }
+                        } else {
+                            let value_clone = value.clone();
+                            div()
+                                .id(ElementId::Name(
+                                    format!("cell-{}-{}", row_id, col_id).into(),
+                                ))
+                                .w(px(180.0))
+                                .min_w(px(180.0))
+                                .h_full()
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .border_r_1()
+                                .border_color(border_color)
+                                .cursor_text()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_ellipsis()
+                                        .overflow_hidden()
+                                        .child(value.clone()),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.start_cell_edit(row_id, col_id, &value_clone, window, cx);
+                                }))
+                                .into_any_element()
+                        }
                     }
                     ColumnType::Date => {
                         let picker =
@@ -992,20 +1043,53 @@ impl TableView {
                                         .number_of_months(1),
                                 ),
                             )
+                            .into_any_element()
                     }
                     ColumnType::String => {
-                        let input =
-                            self.get_or_create_cell_input(row_id, col_id, &value, window, cx);
-                        div()
-                            .w(px(180.0))
-                            .min_w(px(180.0))
-                            .h_full()
-                            .px_1()
-                            .flex()
-                            .items_center()
-                            .border_r_1()
-                            .border_color(border_color)
-                            .child(Input::new(&input).xsmall().appearance(false).text_sm())
+                        let is_editing = self.editing_cell == Some((row_id, col_id));
+                        if is_editing {
+                            if let Some(ref input) = self.editing_cell_input {
+                                div()
+                                    .w(px(180.0))
+                                    .min_w(px(180.0))
+                                    .h_full()
+                                    .px_1()
+                                    .flex()
+                                    .items_center()
+                                    .border_r_1()
+                                    .border_color(border_color)
+                                    .child(Input::new(input).xsmall().appearance(false).text_sm())
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }
+                        } else {
+                            let value_clone = value.clone();
+                            div()
+                                .id(ElementId::Name(
+                                    format!("cell-{}-{}", row_id, col_id).into(),
+                                ))
+                                .w(px(180.0))
+                                .min_w(px(180.0))
+                                .h_full()
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .border_r_1()
+                                .border_color(border_color)
+                                .cursor_text()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_ellipsis()
+                                        .overflow_hidden()
+                                        .child(value.clone()),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.start_cell_edit(row_id, col_id, &value_clone, window, cx);
+                                }))
+                                .into_any_element()
+                        }
                     }
                 };
 
@@ -1041,8 +1125,13 @@ impl TableView {
                                 })
                                 .detach();
 
-                                // Clean up cell inputs and date pickers for this row
-                                this.cell_inputs.retain(|(r, _), _| *r != row_id);
+                                // Clean up editing state and date pickers for this row
+                                if let Some((r, _)) = this.editing_cell {
+                                    if r == row_id {
+                                        this.editing_cell = None;
+                                        this.editing_cell_input = None;
+                                    }
+                                }
                                 this.date_picker_states.retain(|(r, _), _| *r != row_id);
                             })),
                     ),
