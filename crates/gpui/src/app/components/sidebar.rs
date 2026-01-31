@@ -351,23 +351,59 @@ impl AppSidebar {
         self.rename_input = None;
     }
 
+    /// Collect all view IDs embedded in document nodes (database_view nodes).
+    fn collect_embedded_view_ids(documents: &[DocumentModel]) -> HashSet<i32> {
+        let mut ids = HashSet::new();
+        for doc in documents {
+            if let Some(nodes) = doc.content.as_array() {
+                for node in nodes {
+                    if node.get("type").and_then(|t| t.as_str()) == Some("database_view") {
+                        if let Some(metadata) = node.get("metadata") {
+                            if let Some(view_ids) =
+                                metadata.get("view_ids").and_then(|v| v.as_array())
+                            {
+                                for vid in view_ids {
+                                    if let Some(id) = vid.as_i64() {
+                                        ids.insert(id as i32);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ids
+    }
+
     /// Build a tree structure from flat lists of folders, documents, and database views
     fn build_tree(
         folders: &[FolderModel],
         documents: &[DocumentModel],
         views: &[DatabaseViewModel],
+        runtime_embedded_ids: &HashSet<i32>,
     ) -> Vec<SidebarItem> {
+        let mut embedded_view_ids = Self::collect_embedded_view_ids(documents);
+        embedded_view_ids.extend(runtime_embedded_ids);
+
         fn build_children(
             parent_id: Option<i32>,
             folders: &[FolderModel],
             documents: &[DocumentModel],
             views: &[DatabaseViewModel],
+            embedded_view_ids: &HashSet<i32>,
         ) -> Vec<SidebarItem> {
             let mut items = Vec::new();
 
             // Add child folders first
             for folder in folders.iter().filter(|f| f.parent_id == parent_id) {
-                let children = build_children(Some(folder.id), folders, documents, views);
+                let children = build_children(
+                    Some(folder.id),
+                    folders,
+                    documents,
+                    views,
+                    embedded_view_ids,
+                );
                 items.push(SidebarItem::Folder {
                     model: folder.clone(),
                     children,
@@ -379,15 +415,18 @@ impl AppSidebar {
                 items.push(SidebarItem::Document(doc.clone()));
             }
 
-            // Then add database views
-            for view in views.iter().filter(|v| v.folder_id == parent_id) {
+            // Then add database views (excluding those embedded in documents)
+            for view in views
+                .iter()
+                .filter(|v| v.folder_id == parent_id && !embedded_view_ids.contains(&v.id))
+            {
                 items.push(SidebarItem::DatabaseView(view.clone()));
             }
 
             items
         }
 
-        build_children(None, folders, documents, views)
+        build_children(None, folders, documents, views, &embedded_view_ids)
     }
 
     fn refresh_data(this: &Entity<Self>, cx: &mut App) {
@@ -452,7 +491,13 @@ impl Render for AppSidebar {
             _ => vec![],
         };
 
-        let tree = Self::build_tree(&folders, &documents, &views);
+        // Collect embedded view IDs from the runtime global state
+        let runtime_embedded_ids = cx
+            .try_global::<DatabaseState>()
+            .map(|state| state.embedded_view_ids.clone())
+            .unwrap_or_default();
+
+        let tree = Self::build_tree(&folders, &documents, &views, &runtime_embedded_ids);
         let expanded_folders = self.expanded_folders.clone();
         let drop_target_folder = self.drop_target_folder;
         let editing_item = self.editing_item;

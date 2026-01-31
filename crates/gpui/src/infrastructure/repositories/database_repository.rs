@@ -233,6 +233,20 @@ impl DatabaseRepository {
         .map(|rows| rows.into_iter().map(Into::into).collect())
     }
 
+    pub async fn get_views_for_database(
+        &self,
+        database_id: i32,
+    ) -> Result<Vec<DatabaseViewModel>, Error> {
+        query_as::<_, DatabaseViewEntity>(
+            "SELECT id, database_id, name, view_type, folder_id FROM database_views WHERE database_id = ? ORDER BY id ASC",
+        )
+        .bind(database_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)
+        .map(|rows| rows.into_iter().map(Into::into).collect())
+    }
+
     pub async fn get_view_by_id(&self, id: i32) -> Result<DatabaseViewModel, Error> {
         query_as::<_, DatabaseViewEntity>(
             "SELECT id, database_id, name, view_type, folder_id FROM database_views WHERE id = ?",

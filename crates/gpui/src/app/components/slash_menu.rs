@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     components::nodes::{
+        database_view::data::DatabaseViewMetadata,
         element::{NodePayload, RemindrElement},
         heading::data::HeadingMetadata,
         text::data::TextMetadata,
@@ -35,6 +36,7 @@ enum MenuAction {
     InsertHeading2,
     InsertHeading3,
     InsertDivider,
+    InsertDatabaseView,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -91,6 +93,13 @@ impl SlashMenu {
                 icon_path: "icons/separator-horizontal.svg",
                 shortcut: Some("---"),
                 action: MenuAction::InsertDivider,
+            },
+            MenuItem {
+                id: "database_view",
+                label: "Database View",
+                icon_path: "icons/database.svg",
+                shortcut: None,
+                action: MenuAction::InsertDatabaseView,
             },
         ];
 
@@ -210,6 +219,7 @@ impl SlashMenu {
                 MenuAction::InsertHeading2 => self.insert_heading(2, window, cx),
                 MenuAction::InsertHeading3 => self.insert_heading(3, window, cx),
                 MenuAction::InsertDivider => self.insert_divider(window, cx),
+                MenuAction::InsertDatabaseView => self.insert_database_view(window, cx),
             }
         }
         self.selected_index = 0;
@@ -275,6 +285,7 @@ impl SlashMenu {
                 MenuAction::InsertHeading2 => this.insert_heading(2, window, cx),
                 MenuAction::InsertHeading3 => this.insert_heading(3, window, cx),
                 MenuAction::InsertDivider => this.insert_divider(window, cx),
+                MenuAction::InsertDatabaseView => this.insert_database_view(window, cx),
             }))
             .child(
                 div()
@@ -549,6 +560,47 @@ impl SlashMenu {
         });
 
         // Insert a text node after the divider
+        self.state.update(cx, |state, cx| {
+            state.insert_node_after(
+                self.related_id,
+                &RemindrElement::create_node(
+                    NodePayload::Text((TextMetadata::default(), true)),
+                    &self.state,
+                    window,
+                    cx,
+                ),
+            );
+        });
+
+        self.related_id = current_slash_menu_id;
+
+        self.open = false;
+        cx.emit(SlashMenuDismissEvent {
+            restore_focus: false,
+        });
+        cx.notify();
+    }
+
+    fn insert_database_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == SlashMenuMode::Replace {
+            self.remove_slash(window, cx);
+        }
+
+        let current_slash_menu_id = self.related_id;
+
+        self.state.update(cx, |state, cx| {
+            let node = RemindrElement::create_node(
+                NodePayload::DatabaseView(DatabaseViewMetadata::default()),
+                &self.state,
+                window,
+                cx,
+            );
+
+            state.insert_node_after(self.related_id, &node);
+            self.related_id = node.id;
+        });
+
+        // Insert a text node after the database view
         self.state.update(cx, |state, cx| {
             state.insert_node_after(
                 self.related_id,

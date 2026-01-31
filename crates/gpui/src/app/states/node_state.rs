@@ -3,6 +3,7 @@ use serde_json::{Value, from_value};
 use uuid::Uuid;
 
 use crate::app::components::nodes::{
+    database_view::database_view_node::DatabaseViewNode,
     divider::divider_node::DividerNode,
     element::RemindrElement,
     heading::heading_node::HeadingNode,
@@ -138,6 +139,10 @@ impl NodeState {
             RemindrNodeType::Divider => {
                 let element = app.new(|cx| DividerNode::parse(value, window, cx).unwrap());
                 RemindrElement::Divider(element)
+            }
+            RemindrNodeType::DatabaseView => {
+                let element = app.new(|cx| DatabaseViewNode::parse(value, window, cx).unwrap());
+                RemindrElement::DatabaseView(element)
             }
         };
 

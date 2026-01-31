@@ -2,6 +2,10 @@ use crate::{
     Utils,
     app::{
         components::nodes::{
+            database_view::{
+                data::{DatabaseViewMetadata, DatabaseViewNodeData},
+                database_view_node::DatabaseViewNode,
+            },
             divider::{data::DividerNodeData, divider_node::DividerNode},
             heading::{
                 data::{HeadingMetadata, HeadingNodeData},
@@ -25,6 +29,7 @@ pub enum NodePayload {
     Text((TextMetadata, bool)),
     Heading((HeadingMetadata, bool)),
     Divider,
+    DatabaseView(DatabaseViewMetadata),
 }
 
 #[derive(Clone, Debug, IntoElement)]
@@ -32,6 +37,7 @@ pub enum RemindrElement {
     Text(Entity<TextNode>),
     Divider(Entity<DividerNode>),
     Heading(Entity<HeadingNode>),
+    DatabaseView(Entity<DatabaseViewNode>),
 }
 
 impl RemindrElement {
@@ -40,6 +46,7 @@ impl RemindrElement {
             RemindrElement::Text(text) => to_value(text.read(cx).data.clone()).unwrap(),
             RemindrElement::Divider(divider) => to_value(divider.read(cx).data.clone()).unwrap(),
             RemindrElement::Heading(heading) => to_value(heading.read(cx).data.clone()).unwrap(),
+            RemindrElement::DatabaseView(node) => to_value(node.read(cx).data.clone()).unwrap(),
         }
     }
 
@@ -48,6 +55,7 @@ impl RemindrElement {
             RemindrElement::Text(text) => text.read(cx).menu_items(cx),
             RemindrElement::Divider(divider) => divider.read(cx).menu_items(cx),
             RemindrElement::Heading(heading) => heading.read(cx).menu_items(cx),
+            RemindrElement::DatabaseView(node) => node.read(cx).menu_items(cx),
         }
     }
 
@@ -99,6 +107,17 @@ impl RemindrElement {
 
                 RemindrElement::Divider(element)
             }
+            NodePayload::DatabaseView(metadata) => {
+                let data = to_value(DatabaseViewNodeData::new(
+                    id,
+                    "database_view".to_string(),
+                    metadata,
+                ))
+                .unwrap();
+                let element = cx.new(|cx| DatabaseViewNode::parse(&data, window, cx).unwrap());
+
+                RemindrElement::DatabaseView(element)
+            }
         };
 
         RemindrNode::new(id, node)
@@ -112,6 +131,7 @@ impl RenderOnce for RemindrElement {
             RemindrElement::Text(element) => element.clone().into_any_element(),
             RemindrElement::Divider(element) => element.clone().into_any_element(),
             RemindrElement::Heading(element) => element.clone().into_any_element(),
+            RemindrElement::DatabaseView(element) => element.clone().into_any_element(),
         }
     }
 }
@@ -123,6 +143,7 @@ impl Render for RemindrElement {
             RemindrElement::Text(element) => element.clone().into_any_element(),
             RemindrElement::Divider(element) => element.clone().into_any_element(),
             RemindrElement::Heading(element) => element.clone().into_any_element(),
+            RemindrElement::DatabaseView(element) => element.clone().into_any_element(),
         }
     }
 }

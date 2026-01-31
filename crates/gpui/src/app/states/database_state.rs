@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui::Global;
 
@@ -53,6 +53,8 @@ pub struct DatabaseState {
     pub opened_views: Vec<OpenedDatabaseView>,
     /// Unique key of the currently active tab
     pub current_opened_view: Option<i64>,
+    /// View IDs that are embedded in document nodes (should not appear in the sidebar)
+    pub embedded_view_ids: HashSet<i32>,
 }
 
 impl DatabaseState {
@@ -174,6 +176,7 @@ impl Default for DatabaseState {
         Self {
             opened_views: Vec::new(),
             current_opened_view: None,
+            embedded_view_ids: HashSet::new(),
         }
     }
 }

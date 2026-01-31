@@ -29,4 +29,5 @@ pub enum RemindrNodeType {
     Text,
     Divider,
     Heading,
+    DatabaseView,
 }

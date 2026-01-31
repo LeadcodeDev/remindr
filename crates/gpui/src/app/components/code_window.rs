@@ -36,6 +36,9 @@ impl CodeWindow {
                 RemindrElement::Text(node) => to_string_pretty(&node.read(cx).data).unwrap(),
                 RemindrElement::Heading(node) => to_string_pretty(&node.read(cx).data).unwrap(),
                 RemindrElement::Divider(node) => to_string_pretty(&node.read(cx).data).unwrap(),
+                RemindrElement::DatabaseView(node) => {
+                    to_string_pretty(&node.read(cx).data).unwrap()
+                }
             };
             buffer.push_str(&node_json);
             buffer.push('\n');

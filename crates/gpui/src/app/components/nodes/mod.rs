@@ -1,3 +1,4 @@
+pub mod database_view;
 pub mod divider;
 pub mod element;
 pub mod heading;
