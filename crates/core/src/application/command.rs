@@ -30,6 +30,10 @@ pub enum Command {
         after: BlockId,
         kind: BlockKind,
     },
+    InsertBlockAt {
+        target: DropTarget,
+        kind: BlockKind,
+    },
     EditText {
         block: BlockId,
         text: RichText,
@@ -192,6 +196,7 @@ impl Command {
             self,
             Self::CreatePage { .. }
                 | Self::InsertBlock { .. }
+                | Self::InsertBlockAt { .. }
                 | Self::EditText { .. }
                 | Self::SplitBlock { .. }
                 | Self::MergeWithPrevious { .. }

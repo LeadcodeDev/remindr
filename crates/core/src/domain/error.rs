@@ -38,4 +38,10 @@ pub enum DomainError {
     InvalidSortKey,
     #[error("the title is the row page text")]
     TitleIsBlockText,
+    #[error("id already exists")]
+    AlreadyExists,
+    #[error("still referenced by other records")]
+    StillReferenced,
+    #[error("this block kind holds no text")]
+    TextNotAllowed,
 }
