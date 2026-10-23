@@ -9,7 +9,7 @@ use crate::codec::{
     StoredId, encode_kind, encode_parent, encode_property_kind, encode_text, encode_value,
     encode_view,
 };
-use crate::error::write_error;
+use crate::error::{NoRowMatched, write_error};
 
 pub(crate) fn commit(
     connection: &mut Connection,
@@ -25,12 +25,12 @@ pub(crate) fn commit(
 fn apply(connection: &Connection, operation: &Operation) -> Result<(), StoreError> {
     match operation {
         Operation::InsertBlock(block) => insert_block(connection, block),
-        Operation::RemoveBlock { block } => run(
+        Operation::RemoveBlock { block } => run_existing(
             connection,
             "DELETE FROM block WHERE id = ?1",
             (block.to_text(),),
         ),
-        Operation::SetText { block, text } => run(
+        Operation::SetText { block, text } => run_existing(
             connection,
             "UPDATE block SET text = ?1 WHERE id = ?2",
             (encode_text(text)?, block.to_text()),
@@ -41,24 +41,24 @@ fn apply(connection: &Connection, operation: &Operation) -> Result<(), StoreErro
             parent,
             sort_key,
         } => move_block(connection, block, parent, sort_key),
-        Operation::SetBlockAlive { block, alive } => run(
+        Operation::SetBlockAlive { block, alive } => run_existing(
             connection,
             "UPDATE block SET alive = ?1 WHERE id = ?2",
             (alive, block.to_text()),
         ),
         Operation::InsertDatabase(database) => insert_database(connection, database),
         Operation::RemoveDatabase { database } => remove_database(connection, database),
-        Operation::SetDatabaseName { database, name } => run(
+        Operation::SetDatabaseName { database, name } => run_existing(
             connection,
             "UPDATE database SET name = ?1 WHERE id = ?2",
             (name, database.to_text()),
         ),
-        Operation::SetDatabaseIcon { database, icon } => run(
+        Operation::SetDatabaseIcon { database, icon } => run_existing(
             connection,
             "UPDATE database SET icon = ?1 WHERE id = ?2",
             (icon.as_ref().map(|icon| icon.as_str()), database.to_text()),
         ),
-        Operation::SetDatabaseAlive { database, alive } => run(
+        Operation::SetDatabaseAlive { database, alive } => run_existing(
             connection,
             "UPDATE database SET alive = ?1 WHERE id = ?2",
             (alive, database.to_text()),
@@ -77,7 +77,7 @@ fn apply(connection: &Connection, operation: &Operation) -> Result<(), StoreErro
             value,
         } => set_value(connection, row, property, value.as_ref()),
         Operation::PutView(view) => put_view(connection, view),
-        Operation::RemoveView { view } => run(
+        Operation::RemoveView { view } => run_existing(
             connection,
             "DELETE FROM view WHERE id = ?1",
             (view.to_text(),),
@@ -85,13 +85,31 @@ fn apply(connection: &Connection, operation: &Operation) -> Result<(), StoreErro
     }
 }
 
-fn run(connection: &Connection, sql: &str, params: impl Params) -> Result<(), StoreError> {
+fn execute(
+    connection: &Connection,
+    sql: &'static str,
+    params: impl Params,
+) -> Result<usize, StoreError> {
     connection
         .prepare_cached(sql)
         .map_err(write_error)?
         .execute(params)
-        .map(drop)
         .map_err(write_error)
+}
+
+fn run(connection: &Connection, sql: &'static str, params: impl Params) -> Result<(), StoreError> {
+    execute(connection, sql, params).map(drop)
+}
+
+fn run_existing(
+    connection: &Connection,
+    sql: &'static str,
+    params: impl Params,
+) -> Result<(), StoreError> {
+    match execute(connection, sql, params)? {
+        0 => Err(StoreError::Write(Box::new(NoRowMatched(sql)))),
+        _ => Ok(()),
+    }
 }
 
 fn insert_block(connection: &Connection, block: &Block) -> Result<(), StoreError> {
@@ -116,7 +134,7 @@ fn insert_block(connection: &Connection, block: &Block) -> Result<(), StoreError
 
 fn set_kind(connection: &Connection, block: &BlockId, kind: &BlockKind) -> Result<(), StoreError> {
     let (kind, kind_data) = encode_kind(kind)?;
-    run(
+    run_existing(
         connection,
         "UPDATE block SET kind = ?1, kind_data = ?2 WHERE id = ?3",
         (kind, kind_data, block.to_text()),
@@ -130,7 +148,7 @@ fn move_block(
     sort_key: &SortKey,
 ) -> Result<(), StoreError> {
     let (parent_table, parent_id) = encode_parent(parent);
-    run(
+    run_existing(
         connection,
         "UPDATE block SET parent_table = ?1, parent_id = ?2, sort_key = ?3 WHERE id = ?4",
         (parent_table, parent_id, sort_key.as_str(), block.to_text()),
@@ -166,7 +184,7 @@ fn remove_database(connection: &Connection, database: &DatabaseId) -> Result<(),
         "DELETE FROM property WHERE database_id = ?1",
         (&id,),
     )?;
-    run(connection, "DELETE FROM database WHERE id = ?1", (&id,))
+    run_existing(connection, "DELETE FROM database WHERE id = ?1", (&id,))
 }
 
 fn put_property(
@@ -190,7 +208,7 @@ fn remove_property(
     database: &DatabaseId,
     property: &PropertyId,
 ) -> Result<(), StoreError> {
-    run(
+    run_existing(
         connection,
         "DELETE FROM property WHERE id = ?1",
         (property.to_text(),),

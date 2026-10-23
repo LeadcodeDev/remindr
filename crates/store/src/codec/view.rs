@@ -445,7 +445,7 @@ mod tests {
     use remindr_core::ports::StoreError;
 
     use super::{ViewRow, encode_view};
-    use crate::codec::StoredId;
+    use crate::codec::{AWKWARD_FLOATS, StoredId};
 
     fn corrupt_message(error: StoreError) -> String {
         match error {
@@ -601,6 +601,53 @@ mod tests {
             config.contains(r#"{"type":"checkbox","op":"is","value":true}"#),
             "{config}"
         );
+    }
+
+    fn number_of(condition: &Condition) -> f64 {
+        match condition {
+            Condition::Number(
+                NumberCondition::Eq(number)
+                | NumberCondition::Ne(number)
+                | NumberCondition::Lt(number)
+                | NumberCondition::Le(number)
+                | NumberCondition::Gt(number)
+                | NumberCondition::Ge(number),
+            ) => *number,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_numbers_round_trip_bit_for_bit() {
+        let property = PropertyId::new();
+        let numbers: Vec<f64> = AWKWARD_FLOATS
+            .into_iter()
+            .flat_map(|number| [number, -number])
+            .collect();
+        let constructors: [fn(f64) -> NumberCondition; 6] = [
+            NumberCondition::Eq,
+            NumberCondition::Ne,
+            NumberCondition::Lt,
+            NumberCondition::Le,
+            NumberCondition::Gt,
+            NumberCondition::Ge,
+        ];
+        let mut table = view(ViewKind::Table);
+        table.filters = numbers
+            .iter()
+            .flat_map(|number| {
+                constructors.iter().map(|constructor| Filter {
+                    property,
+                    condition: Condition::Number(constructor(*number)),
+                })
+            })
+            .collect();
+        let decoded = row_of(&table).into_view().unwrap();
+        assert_eq!(decoded.filters.len(), table.filters.len());
+        for (sent, loaded) in table.filters.iter().zip(&decoded.filters) {
+            let (sent, loaded) = (number_of(&sent.condition), number_of(&loaded.condition));
+            assert_eq!(loaded.to_bits(), sent.to_bits(), "{sent:e}");
+        }
     }
 
     #[test]

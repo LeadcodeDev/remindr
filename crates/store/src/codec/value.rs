@@ -107,7 +107,7 @@ mod tests {
     use remindr_core::ports::StoreError;
 
     use super::{ValueRow, date_text, decode_value, encode_value, parse_date};
-    use crate::codec::StoredId;
+    use crate::codec::{AWKWARD_FLOATS, StoredId};
 
     fn corrupt_message(error: StoreError) -> String {
         match error {
@@ -156,6 +156,22 @@ mod tests {
             encode_value(&PropertyValue::MultiSelect(vec![])).unwrap(),
             r#"{"type":"multi_select","value":[]}"#
         );
+    }
+
+    #[test]
+    fn numbers_round_trip_bit_for_bit() {
+        for number in AWKWARD_FLOATS
+            .into_iter()
+            .flat_map(|number| [number, -number])
+        {
+            let encoded = encode_value(&PropertyValue::Number(number)).unwrap();
+            match decode_value(&encoded).unwrap() {
+                PropertyValue::Number(decoded) => {
+                    assert_eq!(decoded.to_bits(), number.to_bits(), "{number:e}: {encoded}");
+                }
+                other => panic!("{other:?}"),
+            }
+        }
     }
 
     #[test]

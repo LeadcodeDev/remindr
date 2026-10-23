@@ -50,6 +50,16 @@ pub(crate) use rich_text::encode_text;
 pub(crate) use value::{ValueRow, encode_value};
 pub(crate) use view::{ViewRow, encode_view};
 
+#[cfg(test)]
+pub(crate) const AWKWARD_FLOATS: [f64; 6] = [
+    1.1186231841461947,
+    123456789.12345679,
+    f64::MAX,
+    f64::MIN_POSITIVE,
+    5e-324,
+    -0.0,
+];
+
 pub(crate) trait Named: Sized {
     fn name(&self) -> &'static str;
     fn from_name(raw: &str) -> Option<Self>;
