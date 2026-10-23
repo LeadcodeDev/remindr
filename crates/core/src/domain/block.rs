@@ -1,5 +1,7 @@
 use super::{BlockId, DatabaseId, DomainError, RichText, SortKey, Timestamp};
 
+const MAX_EMOJI_BYTES: usize = 32;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Emoji(String);
 
@@ -7,7 +9,14 @@ impl TryFrom<&str> for Emoji {
     type Error = DomainError;
 
     fn try_from(raw: &str) -> Result<Self, Self::Error> {
-        todo!()
+        let valid = !raw.is_empty()
+            && raw.len() <= MAX_EMOJI_BYTES
+            && !raw.chars().any(char::is_whitespace);
+        if valid {
+            Ok(Emoji(raw.to_owned()))
+        } else {
+            Err(DomainError::InvalidEmoji)
+        }
     }
 }
 
@@ -99,4 +108,17 @@ pub struct Block {
     pub text: RichText,
     pub alive: bool,
     pub created_at: Timestamp,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Emoji;
+
+    #[test]
+    fn emoji_rejects_empty_whitespace_and_long_text() {
+        assert!(Emoji::try_from("").is_err());
+        assert!(Emoji::try_from("a b").is_err());
+        assert!(Emoji::try_from("x".repeat(33).as_str()).is_err());
+        assert_eq!(Emoji::try_from("📄").unwrap().as_str(), "📄");
+    }
 }

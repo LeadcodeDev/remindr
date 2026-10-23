@@ -9,7 +9,11 @@ impl TryFrom<&str> for Link {
     type Error = DomainError;
 
     fn try_from(raw: &str) -> Result<Self, Self::Error> {
-        todo!()
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+            return Err(DomainError::InvalidLink);
+        }
+        Ok(Link(trimmed.to_owned()))
     }
 }
 
@@ -76,12 +80,22 @@ pub struct RichText(Vec<Span>);
 impl RichText {
     #[must_use]
     pub fn new(spans: impl IntoIterator<Item = Span>) -> RichText {
-        todo!()
+        let mut normalized: Vec<Span> = Vec::new();
+        for span in spans.into_iter().filter(|span| !span.text.is_empty()) {
+            match normalized.last_mut() {
+                Some(last) if last.marks == span.marks => last.text.push_str(&span.text),
+                _ => normalized.push(span),
+            }
+        }
+        RichText(normalized)
     }
 
     #[must_use]
     pub fn plain(text: &str) -> RichText {
-        todo!()
+        RichText::new([Span {
+            text: text.to_owned(),
+            marks: Marks::default(),
+        }])
     }
 
     #[must_use]
@@ -142,5 +156,49 @@ impl RichText {
     #[must_use]
     pub fn has_mark(&self, range: Range<usize>, change: &MarkChange) -> bool {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::{Link, Marks, RichText, Span};
+
+    fn span() -> impl Strategy<Value = Span> {
+        ("[a-zé ]{0,4}", any::<bool>(), any::<bool>()).prop_map(|(text, bold, italic)| Span {
+            text,
+            marks: Marks {
+                bold,
+                italic,
+                ..Marks::default()
+            },
+        })
+    }
+
+    #[test]
+    fn plain_empty_text_has_no_span() {
+        assert!(RichText::plain("").spans().is_empty());
+    }
+
+    #[test]
+    fn link_rejects_blank_and_inner_whitespace() {
+        assert!(Link::try_from("  ").is_err());
+        assert!(Link::try_from("https://a b").is_err());
+        assert_eq!(
+            Link::try_from(" https://x.dev ").unwrap().as_str(),
+            "https://x.dev"
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn new_is_in_normal_form(spans in proptest::collection::vec(span(), 0..8)) {
+            let text = RichText::new(spans.clone());
+            prop_assert!(text.spans().iter().all(|span| !span.text.is_empty()));
+            prop_assert!(text.spans().windows(2).all(|pair| pair[0].marks != pair[1].marks));
+            let expected: String = spans.iter().map(|span| span.text.as_str()).collect();
+            prop_assert_eq!(text.to_plain(), expected);
+        }
     }
 }

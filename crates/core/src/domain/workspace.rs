@@ -42,6 +42,7 @@ impl Workspace {
         for view in snapshot.views {
             workspace.views.insert(view.id, view);
         }
+        workspace.validate_databases()?;
         Ok(workspace)
     }
 

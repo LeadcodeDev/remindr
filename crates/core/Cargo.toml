@@ -14,6 +14,8 @@ thiserror.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 cucumber.workspace = true
+futures.workspace = true
+remindr-core = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

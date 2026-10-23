@@ -21,7 +21,13 @@ pub struct Session<S: WorkspaceStore, C: Clock> {
 
 impl<S: WorkspaceStore, C: Clock> Session<S, C> {
     pub fn open(store: S, clock: C) -> Result<Self, SessionError> {
-        todo!()
+        let workspace = Workspace::from_snapshot(store.load()?)?;
+        Ok(Self {
+            workspace,
+            store,
+            clock,
+            history: History,
+        })
     }
 
     #[must_use]
