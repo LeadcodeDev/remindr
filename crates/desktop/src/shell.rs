@@ -297,6 +297,21 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn alternate_back_shortcut_returns_to_the_previous_route(cx: &mut gpui_kit::TestAppContext) {
+        let (mut first, mut second) = (None, None);
+        let model = model_with(cx, |session| {
+            first = Some(add_page(session, Parent::Root, "First"));
+            second = Some(add_page(session, Parent::Root, "Second"));
+        });
+        let (first, second) = (first.unwrap(), second.unwrap());
+        let ui = Ui::open(cx, &model);
+        ui.click(cx, page_open_id(second));
+        assert_eq!(ui.route(cx), Some(Route::Page(second)));
+        ui.press(cx, "cmd-alt-left");
+        assert_eq!(ui.route(cx), Some(Route::Page(first)));
+    }
+
+    #[gpui_kit::test]
     fn back_shortcut_returns_to_the_previous_route(cx: &mut gpui_kit::TestAppContext) {
         let (mut first, mut second) = (None, None);
         let model = model_with(cx, |session| {

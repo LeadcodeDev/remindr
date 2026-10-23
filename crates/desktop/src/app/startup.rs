@@ -42,10 +42,8 @@ pub fn open_session(
 }
 
 fn seed_if_empty(session: &mut Session<AppStore, SystemClock>) -> anyhow::Result<bool> {
-    let workspace = session.workspace();
-    let empty =
-        workspace.children(Parent::Root).next().is_none() && workspace.databases().next().is_none();
-    if !empty {
+    let snapshot = session.workspace().to_snapshot();
+    if !snapshot.blocks.is_empty() || !snapshot.databases.is_empty() {
         return Ok(false);
     }
     let created = session
@@ -74,11 +72,14 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    use remindr_core::application::{Command, Session};
     use remindr_core::domain::{Parent, Workspace};
     use remindr_core::testing::MemoryStore;
 
     use super::{open_session, workspace_path};
-    use crate::app::AppStore;
+    use crate::app::commands::created_database;
+    use crate::app::testing::add_page;
+    use crate::app::{AppStore, SystemClock};
 
     fn titles(workspace: &Workspace) -> Vec<String> {
         workspace
@@ -141,5 +142,34 @@ mod tests {
         let session = open_session(|| Ok(AppStore::Memory(store.shared()))).unwrap();
         assert_eq!(store.committed(), committed);
         assert_eq!(titles(session.workspace()), vec!["Getting started"]);
+    }
+
+    #[test]
+    fn a_workspace_with_only_dead_pages_is_not_seeded() {
+        let store = MemoryStore::new();
+        let mut session = Session::open(AppStore::Memory(store.shared()), SystemClock).unwrap();
+        let page = add_page(&mut session, Parent::Root, "Old");
+        session
+            .execute(Command::DeleteBlocks { blocks: vec![page] })
+            .unwrap();
+        let committed = store.committed();
+        let reopened = open_session(|| Ok(AppStore::Memory(store.shared()))).unwrap();
+        assert_eq!(store.committed(), committed);
+        assert!(titles(reopened.workspace()).is_empty());
+    }
+
+    #[test]
+    fn a_workspace_with_only_a_dead_database_is_not_seeded() {
+        let store = MemoryStore::new();
+        let mut session = Session::open(AppStore::Memory(store.shared()), SystemClock).unwrap();
+        let changes = session.execute(Command::CreateDatabase).unwrap();
+        let database = created_database(&changes).unwrap();
+        session
+            .execute(Command::DeleteDatabase { database })
+            .unwrap();
+        let committed = store.committed();
+        let reopened = open_session(|| Ok(AppStore::Memory(store.shared()))).unwrap();
+        assert_eq!(store.committed(), committed);
+        assert!(titles(reopened.workspace()).is_empty());
     }
 }

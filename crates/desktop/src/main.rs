@@ -25,6 +25,7 @@ use app::{AppStore, SystemClock, WorkspaceModel};
 use shell::Shell;
 
 const WINDOW_TITLE: &str = "Remindr";
+const WINDOW_FAILURE_STATUS: i32 = 1;
 
 fn main() -> ExitCode {
     match run() {
@@ -73,7 +74,7 @@ fn start(session: Session<AppStore, SystemClock>, cx: &mut App) {
     });
     if let Err(error) = opened {
         eprintln!("remindr: cannot open the window: {error:#}");
-        cx.quit();
+        std::process::exit(WINDOW_FAILURE_STATUS);
     }
 }
 

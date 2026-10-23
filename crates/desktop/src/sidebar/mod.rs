@@ -1,5 +1,5 @@
+mod entries;
 mod rename;
-mod rows;
 mod section;
 
 use std::collections::HashSet;
@@ -18,7 +18,7 @@ use crate::app::commands;
 use crate::app::navigation::{affects_navigation, alive_page, page_ancestors};
 use crate::app::{Navigator, Route, WorkspaceModel};
 
-pub use rows::*;
+pub use entries::*;
 use section::Section;
 
 #[derive(Clone)]
@@ -142,8 +142,8 @@ impl Render for SidebarView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = self.navigator.read(cx).route().copied();
         let workspace = self.model.read(cx).workspace();
-        let pages = page_rows(workspace, route.as_ref(), &self.expanded);
-        let databases = database_rows(workspace, route.as_ref());
+        let pages = page_entries(workspace, route.as_ref(), &self.expanded);
+        let databases = database_entries(workspace, route.as_ref());
         let handles = Handles {
             model: self.model.clone(),
             navigator: self.navigator.clone(),
@@ -204,8 +204,8 @@ mod tests {
     use remindr_core::domain::{BlockId, Parent};
 
     use super::{
-        database_menu_id, database_open_id, database_row_id, page_add_id, page_menu_id,
-        page_open_id, page_row_id, page_toggle_id,
+        database_entry_id, database_menu_id, database_open_id, page_add_id, page_entry_id,
+        page_menu_id, page_open_id, page_toggle_id,
     };
     use crate::app::navigation::{child_pages, root_pages};
     use crate::app::testing::{Ui, add_page, create_database, execute, model, model_with};
@@ -247,16 +247,16 @@ mod tests {
         });
         let parent = parent.unwrap();
         let ui = Ui::open(cx, &model);
-        ui.hover(cx, page_row_id(parent));
+        ui.hover(cx, page_entry_id(parent));
         ui.click(cx, page_add_id(parent));
         let created = children(&model, cx, parent);
         assert_eq!(created.len(), 1);
         assert_eq!(ui.route(cx), Some(Route::Page(created[0])));
-        let parent_row = ui.find(cx, page_open_id(parent)).unwrap();
-        let child_row = ui.find(cx, page_open_id(created[0])).unwrap();
-        assert_eq!(child_row.label(), Some("Untitled"));
-        assert!(child_row.bounds().top() > parent_row.bounds().top());
-        assert!(child_row.bounds().left() >= parent_row.bounds().left());
+        let parent_entry = ui.find(cx, page_open_id(parent)).unwrap();
+        let child_entry = ui.find(cx, page_open_id(created[0])).unwrap();
+        assert_eq!(child_entry.label(), Some("Untitled"));
+        assert!(child_entry.bounds().top() > parent_entry.bounds().top());
+        assert!(child_entry.bounds().left() > parent_entry.bounds().left());
     }
 
     #[gpui_kit::test]
@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn clicking_a_row_opens_it_and_selects_it(cx: &mut TestAppContext) {
+    fn clicking_an_entry_opens_it_and_selects_it(cx: &mut TestAppContext) {
         let (mut first, mut second) = (None, None);
         let model = model_with(cx, |session| {
             first = Some(add_page(session, Parent::Root, "First"));
@@ -382,7 +382,7 @@ mod tests {
         });
         let page = page.unwrap();
         let ui = Ui::open(cx, &model);
-        ui.hover(cx, page_row_id(page));
+        ui.hover(cx, page_entry_id(page));
         ui.pick_menu_item(cx, page_menu_id(page), 0).await;
         ui.wait_for(cx, |window, _| window.try_find("rename-input").is_some())
             .await;
@@ -407,7 +407,7 @@ mod tests {
         });
         let page = page.unwrap();
         let ui = Ui::open(cx, &model);
-        ui.hover(cx, page_row_id(page));
+        ui.hover(cx, page_entry_id(page));
         ui.pick_menu_item(cx, page_menu_id(page), 0).await;
         ui.wait_for(cx, |window, _| window.try_find("rename-input").is_some())
             .await;
@@ -421,21 +421,27 @@ mod tests {
 
     #[gpui_kit::test]
     async fn deleted_page_leaves_the_sidebar(cx: &mut TestAppContext) {
-        let (mut keep, mut gone) = (None, None);
+        let (mut keep, mut gone, mut child) = (None, None, None);
         let model = model_with(cx, |session| {
             keep = Some(add_page(session, Parent::Root, "Keep"));
-            gone = Some(add_page(session, Parent::Root, "Gone"));
+            let page = add_page(session, Parent::Root, "Gone");
+            gone = Some(page);
+            child = Some(add_page(session, Parent::Block(page), "Gone child"));
         });
-        let (keep, gone) = (keep.unwrap(), gone.unwrap());
+        let (keep, gone, child) = (keep.unwrap(), gone.unwrap(), child.unwrap());
         let ui = Ui::open(cx, &model);
+        ui.click(cx, page_toggle_id(gone));
         assert!(ui.find(cx, page_open_id(gone)).is_some());
-        ui.hover(cx, page_row_id(gone));
+        assert!(ui.find(cx, page_open_id(child)).is_some());
+        ui.hover(cx, page_entry_id(gone));
         ui.pick_menu_item(cx, page_menu_id(gone), 1).await;
         assert!(ui.find(cx, page_open_id(gone)).is_none());
+        assert!(ui.find(cx, page_open_id(child)).is_none());
         assert!(ui.find(cx, page_open_id(keep)).is_some());
-        model.update(cx, |model, cx| model.undo(cx).unwrap());
-        ui.settle(cx);
+        ui.press(cx, "cmd-z");
         assert!(ui.find(cx, page_open_id(gone)).is_some());
+        assert!(ui.find(cx, page_open_id(child)).is_some());
+        assert!(ui.find(cx, page_open_id(keep)).is_some());
     }
 
     #[gpui_kit::test]
@@ -465,25 +471,25 @@ mod tests {
             assert!(
                 window
                     .within("sidebar-databases")
-                    .try_find(database_row_id(database))
+                    .try_find(database_entry_id(database))
                     .is_some()
             );
             assert!(
                 window
                     .within("sidebar-pages")
-                    .try_find(database_row_id(database))
+                    .try_find(database_entry_id(database))
                     .is_none()
             );
             assert!(
                 window
                     .within("sidebar-pages")
-                    .try_find(page_row_id(page))
+                    .try_find(page_entry_id(page))
                     .is_some()
             );
             assert!(
                 window
                     .within("sidebar-databases")
-                    .try_find(page_row_id(page))
+                    .try_find(page_entry_id(page))
                     .is_none()
             );
         });
@@ -540,7 +546,7 @@ mod tests {
             .unwrap();
         let ui = Ui::open(cx, &model);
         assert!(ui.find(cx, database_open_id(database)).is_some());
-        ui.hover(cx, database_row_id(database));
+        ui.hover(cx, database_entry_id(database));
         ui.pick_menu_item(cx, database_menu_id(database), 1).await;
         assert!(ui.find(cx, database_open_id(database)).is_none());
     }
@@ -559,7 +565,7 @@ mod tests {
             })
             .unwrap();
         let ui = Ui::open(cx, &model);
-        ui.hover(cx, database_row_id(database));
+        ui.hover(cx, database_entry_id(database));
         ui.pick_menu_item(cx, database_menu_id(database), 0).await;
         ui.wait_for(cx, |window, _| window.try_find("rename-input").is_some())
             .await;

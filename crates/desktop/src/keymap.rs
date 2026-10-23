@@ -8,6 +8,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-z", Redo, None),
         KeyBinding::new("cmd-n", NewPage, None),
         KeyBinding::new("cmd-[", Back, None),
+        KeyBinding::new("cmd-alt-left", Back, None),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
@@ -36,6 +37,7 @@ mod tests {
         assert_eq!(bound_to(cx, "cmd-shift-z"), vec!["shell::Redo"]);
         assert_eq!(bound_to(cx, "cmd-n"), vec!["shell::NewPage"]);
         assert_eq!(bound_to(cx, "cmd-["), vec!["shell::Back"]);
+        assert_eq!(bound_to(cx, "cmd-alt-left"), vec!["shell::Back"]);
         assert_eq!(bound_to(cx, "cmd-q"), vec!["shell::Quit"]);
     }
 }

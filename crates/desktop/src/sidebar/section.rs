@@ -14,11 +14,11 @@ use gpui_kit::{
 use remindr_core::domain::{BlockId, DatabaseId};
 
 use super::Handles;
-use super::rename::{self, RenameTarget};
-use super::rows::{
-    Row, Target, database_menu_id, database_open_id, database_row_id, page_add_id, page_icon_id,
-    page_menu_id, page_open_id, page_row_id, page_toggle_id,
+use super::entries::{
+    Entry, Target, database_entry_id, database_menu_id, database_open_id, page_add_id,
+    page_entry_id, page_icon_id, page_menu_id, page_open_id, page_toggle_id,
 };
+use super::rename::{self, RenameTarget};
 use crate::app::Route;
 
 const INDENT: f32 = 16.;
@@ -27,17 +27,22 @@ const INDENT: f32 = 16.;
 pub struct Section {
     id: &'static str,
     label: &'static str,
-    rows: Rc<Vec<Row>>,
+    entries: Rc<Vec<Entry>>,
     handles: Handles,
     collapsed: bool,
 }
 
 impl Section {
-    pub fn new(id: &'static str, label: &'static str, rows: Vec<Row>, handles: &Handles) -> Self {
+    pub fn new(
+        id: &'static str,
+        label: &'static str,
+        entries: Vec<Entry>,
+        handles: &Handles,
+    ) -> Self {
         Self {
             id,
             label,
-            rows: Rc::new(rows),
+            entries: Rc::new(entries),
             handles: handles.clone(),
             collapsed: false,
         }
@@ -58,10 +63,10 @@ impl Collapsible for Section {
 impl SidebarItem for Section {
     fn render(self, _: impl Into<ElementId>, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let heading = cx.theme().sidebar_foreground.opacity(0.7);
-        let rows: Vec<AnyElement> = self
-            .rows
+        let entries: Vec<AnyElement> = self
+            .entries
             .iter()
-            .map(|row| render_row(row, 0, &self.handles, cx))
+            .map(|entry| render_entry(entry, 0, &self.handles, cx))
             .collect();
         v_flex()
             .id(self.id)
@@ -75,34 +80,34 @@ impl SidebarItem for Section {
                     .text_color(heading)
                     .child(self.label),
             )
-            .child(v_flex().gap_0p5().children(rows))
+            .child(v_flex().gap_0p5().children(entries))
     }
 }
 
-fn render_row(row: &Row, depth: usize, handles: &Handles, cx: &App) -> AnyElement {
+fn render_entry(entry: &Entry, depth: usize, handles: &Handles, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let accent = theme.sidebar_accent;
     let foreground = theme.foreground;
     let muted = theme.muted_foreground;
     let radius = theme.radius;
-    let group: SharedString = format!("sidebar-row-{}", row.key()).into();
-    let (row_id, open_id, route) = match row.target {
-        Target::Page(page) => (page_row_id(page), page_open_id(page), Route::Page(page)),
+    let group: SharedString = format!("sidebar-entry-{}", entry.key()).into();
+    let (entry_id, open_id, route) = match entry.target {
+        Target::Page(page) => (page_entry_id(page), page_open_id(page), Route::Page(page)),
         Target::Database(database) => (
-            database_row_id(database),
+            database_entry_id(database),
             database_open_id(database),
             Route::Database(database),
         ),
     };
 
-    let leading = match row.target {
-        Target::Page(page) if !row.children.is_empty() => {
-            toggle_button(page, row.expanded, handles).into_any_element()
+    let leading = match entry.target {
+        Target::Page(page) if !entry.children.is_empty() => {
+            toggle_button(page, entry.expanded, handles).into_any_element()
         }
         _ => div().w_5().flex_none().into_any_element(),
     };
 
-    let icon = match (&row.emoji, row.target) {
+    let icon = match (&entry.emoji, entry.target) {
         (Some(emoji), Target::Page(page)) => div()
             .id(page_icon_id(page))
             .aria_label(emoji.clone())
@@ -124,7 +129,7 @@ fn render_row(row: &Row, depth: usize, handles: &Handles, cx: &App) -> AnyElemen
             .flex()
             .justify_center()
             .child(
-                Icon::new(match row.target {
+                Icon::new(match entry.target {
                     Target::Page(_) => IconName::FileText,
                     Target::Database(_) => IconName::LayoutDashboard,
                 })
@@ -148,15 +153,21 @@ fn render_row(row: &Row, depth: usize, handles: &Handles, cx: &App) -> AnyElemen
         .items_center()
         .cursor_pointer()
         .role(Role::TreeItem)
-        .aria_label(row.label.clone())
-        .aria_selected(row.active)
+        .aria_label(entry.label.clone())
+        .aria_selected(entry.active)
         .on_click(open)
         .test_support()
         .child(icon)
-        .child(div().flex_1().min_w_0().truncate().child(row.label.clone()));
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(entry.label.clone()),
+        );
 
     let line = h_flex()
-        .id(row_id)
+        .id(entry_id)
         .test_support()
         .group(group.clone())
         .w_full()
@@ -165,21 +176,22 @@ fn render_row(row: &Row, depth: usize, handles: &Handles, cx: &App) -> AnyElemen
         .gap_0p5()
         .rounded(radius)
         .pl(px(depth as f32 * INDENT + 2.))
-        .when(row.active, |this| {
+        .when(entry.active, |this| {
             this.bg(accent).font_medium().text_color(foreground)
         })
-        .when(!row.active, |this| this.hover(|style| style.bg(accent)))
+        .when(!entry.active, |this| this.hover(|style| style.bg(accent)))
         .child(leading)
         .child(label_region)
-        .child(actions(row, group, handles));
+        .child(actions(entry, group, handles));
 
-    if row.expanded {
+    if entry.expanded {
         v_flex()
             .child(line)
             .children(
-                row.children
+                entry
+                    .children
                     .iter()
-                    .map(|child| render_row(child, depth + 1, handles, cx)),
+                    .map(|child| render_entry(child, depth + 1, handles, cx)),
             )
             .into_any_element()
     } else {
@@ -205,14 +217,14 @@ fn toggle_button(page: BlockId, expanded: bool, handles: &Handles) -> Button {
         .on_click(move |_, _, cx| handles.toggle(page, cx))
 }
 
-fn actions(row: &Row, group: SharedString, handles: &Handles) -> AnyElement {
+fn actions(entry: &Entry, group: SharedString, handles: &Handles) -> AnyElement {
     let container = h_flex()
         .flex_none()
         .gap_0p5()
         .pr_1()
         .opacity(0.)
         .group_hover(group, |style| style.opacity(1.));
-    match row.target {
+    match entry.target {
         Target::Page(page) => container
             .child(add_button(page, handles))
             .child(page_menu(page, handles))

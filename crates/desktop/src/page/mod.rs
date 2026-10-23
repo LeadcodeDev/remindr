@@ -259,7 +259,7 @@ mod tests {
     use super::{ICON_SUGGESTIONS, icon_option_id};
     use crate::app::testing::{Ui, add_page, create_database, execute, model, model_with};
     use crate::app::{Route, WorkspaceModel};
-    use crate::sidebar::{database_open_id, page_icon_id, page_open_id, page_row_id};
+    use crate::sidebar::{database_open_id, page_icon_id, page_open_id};
     use gpui_kit::Entity;
 
     fn title_of(model: &Entity<WorkspaceModel>, cx: &mut TestAppContext, page: BlockId) -> String {
@@ -395,6 +395,18 @@ mod tests {
         });
         assert_eq!(children, vec![BlockKind::Text]);
         assert_eq!(title_of(&model, cx, page), "Title");
+        assert_eq!(ui.find(cx, "block-editor").unwrap().focused(), Some(true));
+        let first = model.read_with(cx, |model, _| {
+            model
+                .workspace()
+                .children(Parent::Block(page))
+                .next()
+                .map(|block| block.id)
+        });
+        let first = first.unwrap();
+        ui.input(cx, "typed");
+        assert_eq!(title_of(&model, cx, first), "typed");
+        assert_eq!(title_of(&model, cx, page), "Title");
     }
 
     #[gpui_kit::test]
@@ -502,7 +514,6 @@ mod tests {
         ui.click(cx, page_open_id(page));
         assert!(ui.find(cx, "database-screen").is_none());
         assert!(ui.find(cx, "page-view").is_some());
-        let _ = page_row_id(page);
     }
 
     #[gpui_kit::test]
