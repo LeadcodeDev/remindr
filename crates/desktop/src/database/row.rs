@@ -8,7 +8,7 @@ use gpui_kit::{
     Window, div, px,
 };
 use remindr_core::application::{Changes, Command};
-use remindr_core::domain::{BlockId, DatabaseId, Parent, Property, PropertyId, PropertyKind};
+use remindr_core::domain::{BlockId, DatabaseId, Parent, PropertyId, PropertyKind};
 
 use super::cell::Cell;
 use super::ids::property_line_id;
@@ -46,24 +46,15 @@ impl RowProperties {
         }
     }
 
-    fn schema(&self, cx: &Context<Self>) -> Option<(DatabaseId, Vec<Property>)> {
-        let workspace = self.model.read(cx).workspace();
-        let Parent::Database(database) = workspace.block(self.row)?.parent else {
-            return None;
-        };
-        let properties = workspace
-            .database(database)?
-            .schema
-            .properties
-            .iter()
-            .filter(|property| property.kind != PropertyKind::Title)
-            .cloned()
-            .collect();
-        Some((database, properties))
+    fn database(&self, cx: &Context<Self>) -> Option<DatabaseId> {
+        match self.model.read(cx).workspace().block(self.row)?.parent {
+            Parent::Database(database) => Some(database),
+            _ => None,
+        }
     }
 
     fn add_property(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((database, _)) = self.schema(cx) else {
+        let Some(database) = self.database(cx) else {
             return;
         };
         commands::run(
@@ -77,44 +68,72 @@ impl RowProperties {
             cx,
         );
     }
+
+    fn sync_cells(&mut self, database: DatabaseId, window: &mut Window, cx: &mut Context<Self>) {
+        let ids: Vec<PropertyId> = self
+            .model
+            .read(cx)
+            .workspace()
+            .database(database)
+            .map(|found| {
+                found
+                    .schema
+                    .properties
+                    .iter()
+                    .filter(|property| property.kind != PropertyKind::Title)
+                    .map(|property| property.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.cells.retain(|id, _| ids.contains(id));
+        for id in ids {
+            if !self.cells.contains_key(&id) {
+                let (model, row) = (self.model.clone(), self.row);
+                let cell = cx.new(|cx| Cell::new(model, database, row, id, window, cx));
+                self.cells.insert(id, cell);
+            }
+        }
+    }
 }
 
 impl Render for RowProperties {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some((database, properties)) = self.schema(cx) else {
+        let Some(database) = self.database(cx) else {
             return v_flex().id("row-properties").test_support();
         };
-        self.cells
-            .retain(|id, _| properties.iter().any(|property| property.id == *id));
+        self.sync_cells(database, window, cx);
         let muted = cx.theme().muted_foreground;
+        let properties = self
+            .model
+            .read(cx)
+            .workspace()
+            .database(database)
+            .map_or(&[][..], |found| found.schema.properties.as_slice());
         let lines: Vec<_> = properties
             .iter()
-            .map(|property| {
-                let id = property.id;
-                let (model, row) = (self.model.clone(), self.row);
-                let cell = self
-                    .cells
-                    .entry(id)
-                    .or_insert_with(|| cx.new(|cx| Cell::new(model, database, row, id, window, cx)))
-                    .clone();
-                h_flex()
-                    .id(property_line_id(id))
-                    .test_support()
-                    .aria_label(property.name.clone())
-                    .items_center()
-                    .text_size(UI_TEXT)
-                    .child(
-                        h_flex()
-                            .w(px(NAME_WIDTH))
-                            .flex_none()
-                            .px_2()
-                            .gap_2()
-                            .items_center()
-                            .text_color(muted)
-                            .child(Icon::new(kind_icon(&property.kind)).size_3p5())
-                            .child(div().truncate().child(property.name.clone())),
-                    )
-                    .child(div().flex_1().min_w_0().h(TABLE_ROW).child(cell))
+            .filter(|property| property.kind != PropertyKind::Title)
+            .filter_map(|property| {
+                let cell = self.cells.get(&property.id)?.clone();
+                Some(
+                    h_flex()
+                        .id(property_line_id(property.id))
+                        .test_support()
+                        .aria_label(property.name.clone())
+                        .items_center()
+                        .text_size(UI_TEXT)
+                        .child(
+                            h_flex()
+                                .w(px(NAME_WIDTH))
+                                .flex_none()
+                                .px_2()
+                                .gap_2()
+                                .items_center()
+                                .text_color(muted)
+                                .child(Icon::new(kind_icon(&property.kind)).size_3p5())
+                                .child(div().truncate().child(property.name.clone())),
+                        )
+                        .child(div().flex_1().min_w_0().h(TABLE_ROW).child(cell)),
+                )
             })
             .collect();
         v_flex()

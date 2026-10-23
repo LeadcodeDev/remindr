@@ -303,6 +303,56 @@ pub fn open_block_in_width(
     ui
 }
 
+pub struct Paged {
+    inner: gpui_kit::AnyView,
+    width: gpui_kit::Pixels,
+    scroll: gpui_kit::ScrollHandle,
+}
+
+impl Render for Paged {
+    fn render(
+        &mut self,
+        _: &mut Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{
+            InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _,
+            Styled as _, px,
+        };
+        div()
+            .id("page")
+            .w(self.width)
+            .h(px(420.))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .child(self.inner.clone())
+            .child(div().h(px(2000.)))
+    }
+}
+
+pub fn open_block_in_page(
+    cx: &mut TestAppContext,
+    model: &Entity<WorkspaceModel>,
+    block: BlockId,
+    database: DatabaseId,
+    width: gpui_kit::Pixels,
+) -> (Ui, gpui_kit::ScrollHandle) {
+    let shared = model.clone();
+    let scroll = gpui_kit::ScrollHandle::new();
+    let held = scroll.clone();
+    let (ui, _) = open(cx, model, move |window, cx| {
+        let inner: gpui_kit::AnyView = cx
+            .new(|cx| DatabaseViewBlock::new(shared, block, database, window, cx))
+            .into();
+        cx.new(|_| Paged {
+            inner,
+            width,
+            scroll: held,
+        })
+    });
+    (ui, scroll)
+}
+
 pub struct Stack {
     views: Vec<gpui_kit::AnyView>,
 }
@@ -650,33 +700,6 @@ mod seeding {
             .next()
             .map(|view| view.id)
             .unwrap();
-        let title = session
-            .workspace()
-            .database(database)
-            .unwrap()
-            .schema
-            .properties[0]
-            .id;
-        for (property, width) in [
-            (title, 105),
-            (status, 90),
-            (tags, 125),
-            (budget, 85),
-            (progress, 65),
-            (due, 90),
-            (shipped, 60),
-            (link, 85),
-            (notes, 80),
-        ] {
-            run(
-                &mut session,
-                Command::SetColumnWidth {
-                    view: first,
-                    property,
-                    width,
-                },
-            );
-        }
         let kind = ViewKind::Board { group_by: status };
         if std::env::var_os("REMINDR_SEED_BOARD_FIRST").is_some() {
             run(&mut session, Command::SetViewKind { view: first, kind });

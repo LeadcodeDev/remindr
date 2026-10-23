@@ -1,10 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, ElementExt as _, Icon, IconName, Sizable as _, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, Render, SharedString, Stateful, StatefulInteractiveElement as _,
@@ -16,9 +19,9 @@ use remindr_core::domain::{BlockId, DatabaseId, Property, PropertyId, PropertyKi
 use super::cell::Cell;
 use super::changes::touches;
 use super::header::{self, MenuState};
-use super::ids::{grip_id, header_id, rename_id, row_id};
-use super::kinds::{kind_choices, kind_icon};
-use super::ui::icon_label;
+use super::ids::{grip_id, header_id, open_row_id, rename_id, row_id};
+use super::kinds::{KindTag, kind_choices};
+use super::ui::{icon_label, open_page};
 use crate::app::navigation::page_title;
 use crate::app::{WorkspaceModel, commands};
 use crate::theme::{
@@ -27,6 +30,7 @@ use crate::theme::{
 };
 
 const ADD_WIDTH: f32 = 40.;
+const GRIP_WIDTH: Pixels = px(14.);
 const MAX_ROWS: usize = 20;
 
 fn content_height(rows: usize) -> Pixels {
@@ -52,7 +56,6 @@ fn row_group(row: BlockId) -> SharedString {
 #[derive(Clone)]
 struct RowDrag {
     row: BlockId,
-    title: SharedString,
 }
 
 struct RowPreview {
@@ -75,12 +78,31 @@ impl Render for RowPreview {
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct Col {
+    id: PropertyId,
+    name: SharedString,
+    title: bool,
+    kind: KindTag,
+}
+
+impl Col {
+    fn of(property: &Property) -> Self {
+        Self {
+            id: property.id,
+            name: SharedString::from(property.name.clone()),
+            title: property.kind == PropertyKind::Title,
+            kind: KindTag::of(&property.kind),
+        }
+    }
+}
+
 pub struct Grid {
     model: Entity<WorkspaceModel>,
     database: DatabaseId,
     scope: Scope,
     owner: WeakEntity<TableView>,
-    columns: Vec<Property>,
+    columns: Vec<Col>,
     rows: Vec<BlockId>,
     widths: BTreeMap<PropertyId, u32>,
     cells: HashMap<(BlockId, PropertyId), Entity<Cell>>,
@@ -90,62 +112,80 @@ pub struct Grid {
 }
 
 impl Grid {
-    fn width_of(&self, property: &Property) -> u32 {
+    fn width_of(&self, column: &Col) -> u32 {
         self.widths
-            .get(&property.id)
+            .get(&column.id)
             .copied()
-            .unwrap_or(if property.kind == PropertyKind::Title {
+            .unwrap_or(if column.title {
                 TABLE_TITLE_WIDTH
             } else {
                 TABLE_COLUMN_WIDTH
             })
     }
 
+    fn content_width(&self) -> Pixels {
+        let columns: u32 = self
+            .columns
+            .iter()
+            .map(|column| self.width_of(column))
+            .sum();
+        px(columns as f32 + ADD_WIDTH)
+    }
+
     fn load(&mut self, cx: &App) -> bool {
         let workspace = self.model.read(cx).workspace();
-        let before = (self.columns.clone(), self.widths.clone());
-        let database = workspace.database(self.database);
-        let (columns, rows) = match (self.scope, database) {
-            (Scope::View(id), Some(database)) => match workspace.view(id) {
+        let Some(database) = workspace.database(self.database) else {
+            let changed = !self.columns.is_empty();
+            self.columns.clear();
+            self.rows.clear();
+            self.cells.clear();
+            self.menus.clear();
+            self.reorderable = false;
+            return changed;
+        };
+        let properties = &database.schema.properties;
+        let mut changed = false;
+        let columns: Vec<Col> = match self.scope {
+            Scope::View(id) => match workspace.view(id) {
                 Some(view) => {
-                    self.widths.clone_from(&view.column_widths);
-                    let columns = view
-                        .visible
+                    if view.column_widths != self.widths {
+                        self.widths.clone_from(&view.column_widths);
+                        changed = true;
+                    }
+                    self.reorderable = view.sorts.is_empty();
+                    self.rows = workspace.query(id).unwrap_or_default();
+                    view.visible
                         .iter()
                         .filter_map(|visible| {
-                            database
-                                .schema
-                                .properties
-                                .iter()
-                                .find(|property| property.id == *visible)
+                            properties.iter().find(|property| property.id == *visible)
                         })
-                        .cloned()
-                        .collect();
-                    (columns, workspace.query(id).unwrap_or_default())
+                        .map(Col::of)
+                        .collect()
                 }
-                None => (Vec::new(), Vec::new()),
+                None => {
+                    self.reorderable = false;
+                    self.rows.clear();
+                    Vec::new()
+                }
             },
-            (Scope::Database, Some(database)) => (
-                database.schema.properties.clone(),
-                workspace.rows(self.database).map(|row| row.id).collect(),
-            ),
-            (_, None) => (Vec::new(), Vec::new()),
+            Scope::Database => {
+                self.reorderable = false;
+                self.rows = workspace.rows(self.database).map(|row| row.id).collect();
+                properties.iter().map(Col::of).collect()
+            }
         };
-        self.reorderable = match self.scope {
-            Scope::View(id) => workspace.view(id).is_some_and(|view| view.sorts.is_empty()),
-            Scope::Database => false,
-        };
-        self.columns = columns;
-        self.rows = rows;
-        let live: Vec<(BlockId, PropertyId)> = self
-            .rows
-            .iter()
-            .flat_map(|row| self.columns.iter().map(move |property| (*row, property.id)))
-            .collect();
-        self.cells.retain(|key, _| live.contains(key));
-        let shown: Vec<PropertyId> = self.columns.iter().map(|column| column.id).collect();
-        self.menus.retain(|id, _| shown.contains(id));
-        before != (self.columns.clone(), self.widths.clone())
+        if columns != self.columns {
+            self.columns = columns;
+            changed = true;
+        }
+        let rows: HashSet<BlockId> = self.rows.iter().copied().collect();
+        let columns = &self.columns;
+        self.cells.retain(|(row, property), _| {
+            rows.contains(row) && columns.iter().any(|column| column.id == *property)
+        });
+        self.menus
+            .retain(|id, _| columns.iter().any(|column| column.id == *id));
+        changed
     }
 
     fn add_button(&self) -> AnyElement {
@@ -161,8 +201,9 @@ impl Grid {
             })
             .into_any_element()
     }
-    fn header(&mut self, property: &Property, cx: &mut Context<TableState<Self>>) -> AnyElement {
-        let id = property.id;
+
+    fn header(&mut self, column: &Col, cx: &mut Context<TableState<Self>>) -> AnyElement {
+        let id = column.id;
         let (state, _) = self.menus.entry(id).or_insert_with(|| {
             let state = cx.new(|_| MenuState::default());
             let subscription = cx.observe(&state, |_, _, cx| cx.notify());
@@ -171,21 +212,19 @@ impl Grid {
         let state = state.clone();
         let open = state.read(cx).is_open();
         let owner = self.owner.clone();
-        let title = property.kind == PropertyKind::Title;
+        let title = column.title;
         let hideable = matches!(self.scope, Scope::View(_));
-        let current = property.kind.clone();
+        let current = column.kind;
         let children = vec![
-            Icon::new(kind_icon(&property.kind))
-                .size_3p5()
-                .into_any_element(),
+            Icon::new(column.kind.icon()).size_3p5().into_any_element(),
             div()
                 .truncate()
-                .child(property.name.clone())
+                .child(column.name.clone())
                 .into_any_element(),
         ];
         header::cell(
             header_id(id),
-            property.name.clone().into(),
+            column.name.clone(),
             &state,
             open,
             children,
@@ -194,21 +233,22 @@ impl Grid {
                 let retyper = owner.clone();
                 let hider = owner.clone();
                 let remover = owner.clone();
-                let current = current.clone();
-                let menu = menu
-                    .item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
+                let menu =
+                    menu.item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
                         renamer
                             .update(cx, |view, cx| view.begin_rename(id, window, cx))
                             .ok();
-                    }))
-                    .submenu("Type", window, cx, move |menu, _, _| {
+                    }));
+                let menu = if title {
+                    menu.item(PopupMenuItem::new("Type").disabled(true))
+                } else {
+                    menu.submenu("Type", window, cx, move |menu, _, _| {
                         kind_choices()
                             .into_iter()
                             .fold(menu, |menu, (label, kind)| {
                                 let owner = retyper.clone();
                                 let chosen = kind.clone();
-                                let same = std::mem::discriminant(&kind)
-                                    == std::mem::discriminant(&current);
+                                let same = KindTag::of(&kind) == current;
                                 menu.item(
                                     PopupMenuItem::new(label)
                                         .checked(same)
@@ -223,7 +263,8 @@ impl Grid {
                                         }),
                                 )
                             })
-                    });
+                    })
+                };
                 let menu = if hideable {
                     menu.item(PopupMenuItem::new("Hide").on_click(move |_, window, cx| {
                         hider.update(cx, |view, cx| view.hide(id, window, cx)).ok();
@@ -258,8 +299,8 @@ impl TableDelegate for Grid {
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
         match self.columns.get(col_ix) {
-            Some(property) => Column::new(property.id.as_uuid().to_string(), property.name.clone())
-                .width(px(self.width_of(property) as f32))
+            Some(column) => Column::new(column.id.as_uuid().to_string(), column.name.clone())
+                .width(px(self.width_of(column) as f32))
                 .min_width(px(60.))
                 .p_0(),
             None => Column::new("add", "")
@@ -277,11 +318,11 @@ impl TableDelegate for Grid {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(property) = self.columns.get(col_ix).cloned() else {
+        let Some(column) = self.columns.get(col_ix).cloned() else {
             return self.add_button();
         };
         match &self.renaming {
-            Some((id, input)) if *id == property.id => {
+            Some((id, input)) if *id == column.id => {
                 let owner = self.owner.clone();
                 div()
                     .w_full()
@@ -289,10 +330,10 @@ impl TableDelegate for Grid {
                     .on_action(move |_: &Escape, _, cx| {
                         owner.update(cx, |view, cx| view.cancel_rename(cx)).ok();
                     })
-                    .child(Input::new(input).id(rename_id(property.id)).small())
+                    .child(Input::new(input).id(rename_id(column.id)).small())
                     .into_any_element()
             }
-            _ => self.header(&property, cx),
+            _ => self.header(&column, cx),
         }
     }
 
@@ -327,57 +368,78 @@ impl TableDelegate for Grid {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let (Some(row), Some(property)) = (self.rows.get(row_ix), self.columns.get(col_ix)) else {
+        let (Some(row), Some(column)) = (self.rows.get(row_ix), self.columns.get(col_ix)) else {
             return div().into_any_element();
         };
-        let (row, property, title) = (*row, property.id, property.kind == PropertyKind::Title);
+        let (row, property) = (*row, column.id);
         let (model, database) = (self.model.clone(), self.database);
         let cell = self
             .cells
             .entry((row, property))
             .or_insert_with(|| cx.new(|cx| Cell::new(model, database, row, property, window, cx)))
             .clone();
-        if !(self.reorderable && title) {
+        if col_ix != 0 {
             return cell.into_any_element();
         }
-        let name = self
-            .model
-            .read(cx)
-            .workspace()
-            .block(row)
-            .map(page_title)
-            .unwrap_or_default();
+        let inset = if self.reorderable { GRIP_WIDTH } else { px(0.) };
+        cell.update(cx, |cell, cx| cell.set_inset(inset, cx));
         let group = row_group(row);
-        let drag = RowDrag {
-            row,
-            title: name.into(),
-        };
-        div()
-            .relative()
-            .size_full()
-            .child(cell)
+        let background = cx.theme().background;
+        let muted = cx.theme().muted_foreground;
+        let open = div()
+            .id(("open-overlay", row_ix))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_1()
+            .flex()
+            .items_center()
+            .bg(background)
+            .opacity(0.)
+            .group_hover(group.clone(), |style| style.opacity(1.))
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                Button::new(open_row_id(row))
+                    .ghost()
+                    .xsmall()
+                    .child(div().text_size(UI_TEXT_SMALL).child("Open"))
+                    .on_click(move |_, _, cx| open_page(row, cx)),
+            );
+        let wrapper = div().relative().size_full().child(cell).child(open);
+        if !self.reorderable {
+            return wrapper.into_any_element();
+        }
+        let model = self.model.clone();
+        wrapper
             .child(
                 div()
                     .id(grip_id(row))
                     .test_support()
-                    .occlude()
                     .absolute()
                     .top_0()
                     .left_0()
                     .h_full()
-                    .w(px(14.))
+                    .w(GRIP_WIDTH)
                     .flex()
                     .items_center()
                     .justify_center()
                     .text_size(UI_TEXT_SMALL)
-                    .text_color(cx.theme().muted_foreground)
-                    .bg(cx.theme().background)
+                    .text_color(muted)
+                    .bg(background)
                     .cursor_grab()
                     .opacity(0.)
                     .group_hover(group, |style| style.opacity(1.))
-                    .on_drag(drag, |dragged, _, _, cx| {
-                        let title = dragged.title.clone();
-                        cx.new(|_| RowPreview { title })
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .on_drag(RowDrag { row }, move |dragged, _, _, cx| {
+                        let title = model
+                            .read(cx)
+                            .workspace()
+                            .block(dragged.row)
+                            .map(page_title)
+                            .unwrap_or_default();
+                        cx.new(|_| RowPreview {
+                            title: title.into(),
+                        })
                     })
                     .child("⋮⋮"),
             )
@@ -404,6 +466,7 @@ pub struct TableView {
     height: Height,
     state: Entity<TableState<Grid>>,
     renaming: Option<Renaming>,
+    viewport: Pixels,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -449,6 +512,7 @@ impl TableView {
             height,
             state,
             renaming: None,
+            viewport: px(0.),
             _subscriptions: subscriptions,
         }
     }
@@ -508,8 +572,8 @@ impl TableView {
             grid.columns
                 .iter()
                 .zip(widths)
-                .filter(|(property, width)| grid.width_of(property) != **width)
-                .map(|(property, width)| (property.id, *width))
+                .filter(|(column, width)| grid.width_of(column) != **width)
+                .map(|(column, width)| (column.id, *width))
                 .collect()
         };
         match self.scope {
@@ -605,26 +669,17 @@ impl TableView {
 
     fn begin_rename(&mut self, property: PropertyId, window: &mut Window, cx: &mut Context<Self>) {
         let name = self
-            .state
+            .model
             .read(cx)
-            .delegate()
-            .columns
-            .iter()
-            .find(|column| column.id == property)
-            .map(|column| column.name.clone())
-            .or_else(|| {
-                self.model
-                    .read(cx)
-                    .workspace()
-                    .database(self.database)
-                    .and_then(|database| {
-                        database
-                            .schema
-                            .properties
-                            .iter()
-                            .find(|candidate| candidate.id == property)
-                            .map(|candidate| candidate.name.clone())
-                    })
+            .workspace()
+            .database(self.database)
+            .and_then(|database| {
+                database
+                    .schema
+                    .properties
+                    .iter()
+                    .find(|candidate| candidate.id == property)
+                    .map(|candidate| candidate.name.clone())
             })
             .unwrap_or_default();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name));
@@ -711,11 +766,8 @@ impl TableView {
             .columns
             .iter()
             .find(|column| column.id == property)
-            .map(|column| column.kind.clone());
-        let same = current.is_some_and(|current| {
-            std::mem::discriminant(&current) == std::mem::discriminant(&kind)
-        });
-        if same {
+            .map(|column| column.kind);
+        if current == Some(KindTag::of(&kind)) {
             return;
         }
         commands::run(
@@ -799,7 +851,14 @@ impl TableView {
 
 impl Render for TableView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.state.read(cx).delegate().rows.len();
+        let grid = self.state.read(cx).delegate();
+        let rows = grid.rows.len();
+        let overflows = self.viewport > px(0.) && grid.content_width() > self.viewport;
+        let scrollbar = if overflows {
+            Scrollbar::width()
+        } else {
+            px(0.)
+        };
         let table = DataTable::new(&self.state)
             .bordered(false)
             .small()
@@ -819,29 +878,33 @@ impl Render for TableView {
                 this.move_row(dragged.row, None, window, cx);
             }))
             .child(new_row);
+        let measure = cx.entity();
+        let area = |lines: usize| {
+            div()
+                .w_full()
+                .h(content_height(lines) + scrollbar)
+                .on_prepaint(move |bounds, _, cx| {
+                    measure.update(cx, |this, cx| {
+                        if this.viewport != bounds.size.width {
+                            this.viewport = bounds.size.width;
+                            cx.notify();
+                        }
+                    });
+                })
+                .child(table)
+        };
         match self.height {
             Height::Rows => v_flex()
                 .id("table-view")
                 .w_full()
                 .text_size(UI_TEXT)
-                .child(
-                    div()
-                        .w_full()
-                        .h(content_height(rows.min(MAX_ROWS)))
-                        .child(table),
-                )
+                .child(area(rows.min(MAX_ROWS)))
                 .child(footer),
             Height::Fill => v_flex()
                 .id("table-view")
                 .size_full()
                 .text_size(UI_TEXT)
-                .child(
-                    div()
-                        .w_full()
-                        .h(content_height(rows))
-                        .min_h_0()
-                        .child(table),
-                )
+                .child(area(rows).min_h_0())
                 .child(footer.flex_none()),
         }
     }
@@ -854,8 +917,9 @@ mod tests {
     use remindr_core::application::Command;
     use remindr_core::domain::{BlockId, PropertyKind, PropertyValue, Sort, SortDirection, ViewId};
 
-    use crate::app::WorkspaceModel;
+    use super::GRIP_WIDTH;
     use crate::app::testing::{execute, model_with};
+    use crate::app::{Route, WorkspaceModel};
     use crate::database::ids::{
         cell_id, cell_text_id, grip_id, header_id, open_row_id, option_id, rename_id, row_id,
     };
@@ -960,7 +1024,10 @@ mod tests {
             .find(cx, cell_text_id(tasks.rows[0], tasks.title))
             .unwrap()
             .bounds();
-        assert!(text.size.width >= cell.size.width - px(16.), "{text:?}");
+        assert!(
+            text.size.width >= cell.size.width - px(16.) - GRIP_WIDTH,
+            "{text:?}"
+        );
         let open = ui.find(cx, open_row_id(tasks.rows[0])).unwrap().bounds();
         assert!(open.right() <= cell.right());
         assert!(open.left() > cell.left());
@@ -983,6 +1050,147 @@ mod tests {
             "{before:?} {after:?}"
         );
         assert!(after.right() <= px(500.) + px(1.), "{after:?}");
+    }
+
+    #[gpui_kit::test]
+    fn clicking_near_the_right_edge_of_a_header_opens_its_menu(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        let column = ElementId::NamedInteger("col-header".into(), 1);
+        let bounds = ui.find(cx, column.clone()).unwrap().bounds();
+        let trigger = ui.find(cx, header_id(tasks.status)).unwrap().bounds();
+        assert!(
+            trigger.size.width >= bounds.size.width - px(12.),
+            "{bounds:?} {trigger:?}"
+        );
+        ui.with(cx, |window, cx| {
+            window.click_at(
+                column,
+                point(bounds.size.width - px(24.), bounds.size.height / 2.),
+                cx,
+            );
+        });
+        ui.settle(cx);
+        assert!(ui.exists(cx, "popup-menu"));
+    }
+
+    #[gpui_kit::test]
+    fn the_last_row_stays_clickable_when_the_table_scrolls_sideways(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        for index in 0..5 {
+            execute(
+                &model,
+                cx,
+                Command::AddProperty {
+                    database: tasks.database,
+                    name: format!("Extra {index}"),
+                    kind: PropertyKind::Text,
+                },
+            );
+        }
+        assert_eq!(visible_columns(&model, cx, tasks.view), 8);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        let last = *tasks.rows.last().unwrap();
+        ui.click(cx, cell_id(last, tasks.status));
+        assert_eq!(
+            ui.find(cx, cell_id(last, tasks.status)).unwrap().expanded(),
+            Some(true)
+        );
+        let row = ui.find(cx, row_id(last)).unwrap().bounds();
+        let footer = ui.find(cx, "table-new-row").unwrap().bounds();
+        assert!(footer.top() >= row.bottom() + px(16.), "{row:?} {footer:?}");
+    }
+
+    #[gpui_kit::test]
+    fn the_open_button_opens_the_row_page(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        ui.hover(cx, row_id(tasks.rows[1]));
+        ui.click(cx, open_row_id(tasks.rows[1]));
+        assert_eq!(ui.route(cx), Some(Route::Page(tasks.rows[1])));
+    }
+
+    #[gpui_kit::test]
+    fn hiding_the_title_moves_the_grip_and_open_to_the_first_column(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        ui.click(cx, header_id(tasks.title));
+        ui.pick_item(cx, "popup-menu", 2usize);
+        assert!(!ui.exists(cx, header_id(tasks.title)));
+        let visible = model.read_with(cx, |model, _| {
+            model.workspace().view(tasks.view).unwrap().visible.clone()
+        });
+        assert_eq!(visible, vec![tasks.status, tasks.priority]);
+        let row = tasks.rows[2];
+        let first = ui.find(cx, cell_id(row, tasks.status)).unwrap().bounds();
+        let grip = ui.find(cx, grip_id(row)).unwrap().bounds();
+        let open = ui.find(cx, open_row_id(row)).unwrap().bounds();
+        assert!(grip.left() >= first.left() && grip.right() <= first.right());
+        assert!(open.left() >= first.left() && open.right() <= first.right());
+        ui.hover(cx, row_id(row));
+        ui.click(cx, open_row_id(row));
+        assert_eq!(ui.route(cx), Some(Route::Page(row)));
+        ui.hover(cx, row_id(tasks.rows[3]));
+        ui.drag_to(cx, grip_id(tasks.rows[3]), row_id(tasks.rows[0]));
+        assert_eq!(
+            titles(&model, cx, tasks.view),
+            ["Celebrate", "Write spec", "Build core", "Ship UI"]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_row_grip_does_not_cover_the_title_text(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        let row = tasks.rows[0];
+        let grip = ui.find(cx, grip_id(row)).unwrap().bounds();
+        let text = ui
+            .find(cx, cell_text_id(row, tasks.title))
+            .unwrap()
+            .bounds();
+        assert!(grip.right() <= text.left(), "{grip:?} {text:?}");
+        execute(
+            &model,
+            cx,
+            Command::SetSorts {
+                view: tasks.view,
+                sorts: vec![Sort {
+                    property: tasks.priority,
+                    direction: SortDirection::Ascending,
+                }],
+            },
+        );
+        ui.settle(cx);
+        let sorted = ui
+            .find(cx, cell_text_id(row, tasks.title))
+            .unwrap()
+            .bounds();
+        assert!(sorted.left() < text.left(), "{sorted:?} {text:?}");
+    }
+
+    #[gpui_kit::test]
+    fn the_title_type_entry_is_disabled(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        ui.click(cx, header_id(tasks.title));
+        ui.with(cx, |window, cx| {
+            window.within("popup-menu").hover(1usize, cx)
+        });
+        ui.settle(cx);
+        assert!(!ui.exists(cx, "submenu"));
+        ui.pick_item(cx, "popup-menu", 1usize);
+        assert!(!ui.exists(cx, "notification"));
+        let kind = model.read_with(cx, |model, _| {
+            model
+                .workspace()
+                .database(tasks.database)
+                .unwrap()
+                .schema
+                .properties[0]
+                .kind
+                .clone()
+        });
+        assert_eq!(kind, PropertyKind::Title);
     }
 
     #[gpui_kit::test]

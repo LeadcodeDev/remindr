@@ -2,13 +2,14 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription,
     TestSupportExt as _, Window, prelude::FluentBuilder as _, px,
 };
 use remindr_core::application::{Changes, Command};
 use remindr_core::domain::{
-    BlockId, DatabaseId, OptionId, PropertyId, PropertyKind, PropertyValue, SelectOption,
+    BlockId, DatabaseId, OptionColor, OptionId, PropertyId, PropertyKind, PropertyValue,
+    SelectOption,
 };
 
 use super::{Done, write_value};
@@ -66,7 +67,7 @@ impl OptionsPicker {
             .update(cx, |search, cx| search.focus(window, cx));
     }
 
-    fn snapshot(&self, cx: &Context<Self>) -> (Vec<SelectOption>, Vec<OptionId>) {
+    fn read<'a>(&self, cx: &'a App) -> (&'a [SelectOption], &'a [OptionId]) {
         let workspace = self.model.read(cx).workspace();
         let options = workspace
             .database(self.database)
@@ -77,17 +78,16 @@ impl OptionsPicker {
                     .iter()
                     .find(|property| property.id == self.property)
             })
-            .map(|property| match &property.kind {
+            .map_or(&[][..], |property| match &property.kind {
                 PropertyKind::Select { options } | PropertyKind::MultiSelect { options } => {
-                    options.clone()
+                    options.as_slice()
                 }
-                _ => Vec::new(),
-            })
-            .unwrap_or_default();
+                _ => &[],
+            });
         let chosen = match workspace.value(self.row, self.property) {
-            Some(PropertyValue::Select(option)) => vec![*option],
-            Some(PropertyValue::MultiSelect(options)) => options.clone(),
-            _ => Vec::new(),
+            Some(PropertyValue::Select(option)) => std::slice::from_ref(option),
+            Some(PropertyValue::MultiSelect(options)) => options.as_slice(),
+            _ => &[],
         };
         (options, chosen)
     }
@@ -111,15 +111,16 @@ impl OptionsPicker {
         if typed.is_empty() {
             return;
         }
-        let (options, _) = self.snapshot(cx);
         let wanted = typed.to_lowercase();
+        let (options, _) = self.read(cx);
         let existing = options
             .iter()
             .find(|option| option.name.to_lowercase() == wanted)
             .map(|option| option.id);
+        let color = next_option_color(options);
         let option = match existing {
             Some(option) => option,
-            None => match self.create(&typed, &options, window, cx) {
+            None => match self.create(&typed, color, window, cx) {
                 Some(option) => option,
                 None => return,
             },
@@ -132,7 +133,7 @@ impl OptionsPicker {
     fn create(
         &mut self,
         name: &str,
-        options: &[SelectOption],
+        color: OptionColor,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<OptionId> {
@@ -142,23 +143,22 @@ impl OptionsPicker {
                 database: self.database,
                 property: self.property,
                 name: name.to_owned(),
-                color: next_option_color(options),
+                color,
             },
             window,
             cx,
         )?;
-        let (options, _) = self.snapshot(cx);
+        let (options, _) = self.read(cx);
         options
-            .into_iter()
+            .iter()
             .rev()
             .find(|option| option.name == name)
             .map(|option| option.id)
     }
 
     fn pick(&mut self, option: OptionId, window: &mut Window, cx: &mut Context<Self>) {
-        let (_, chosen) = self.snapshot(cx);
         let value = if self.multiple {
-            let mut next = chosen;
+            let mut next = self.read(cx).1.to_vec();
             match next.iter().position(|candidate| *candidate == option) {
                 Some(position) => {
                     next.remove(position);
@@ -185,7 +185,7 @@ impl OptionsPicker {
 
 impl Render for OptionsPicker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (options, chosen) = self.snapshot(cx);
+        let (options, chosen) = self.read(cx);
         let typed = self.search.read(cx).value().trim().to_owned();
         let wanted = typed.to_lowercase();
         let exact = options

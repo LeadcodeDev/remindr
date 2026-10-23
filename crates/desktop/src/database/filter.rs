@@ -90,22 +90,20 @@ impl FilterPanel {
         }
     }
 
-    fn filters(&self, cx: &gpui_kit::App) -> Vec<Filter> {
+    fn filters<'a>(&self, cx: &'a gpui_kit::App) -> &'a [Filter] {
         self.model
             .read(cx)
             .workspace()
             .view(self.view)
-            .map(|view| view.filters.clone())
-            .unwrap_or_default()
+            .map_or(&[][..], |view| view.filters.as_slice())
     }
 
-    fn schema(&self, cx: &gpui_kit::App) -> Vec<Property> {
+    fn schema<'a>(&self, cx: &'a gpui_kit::App) -> &'a [Property] {
         self.model
             .read(cx)
             .workspace()
             .database(self.database)
-            .map(|database| database.schema.properties.clone())
-            .unwrap_or_default()
+            .map_or(&[][..], |database| database.schema.properties.as_slice())
     }
 
     fn store(&mut self, filters: Vec<Filter>, window: &mut Window, cx: &mut Context<Self>) {
@@ -129,7 +127,7 @@ impl FilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut filters = self.filters(cx);
+        let mut filters = self.filters(cx).to_vec();
         let (Some(slot), Some((property, condition))) = (filters.get_mut(index), condition) else {
             return;
         };
@@ -148,23 +146,24 @@ impl FilterPanel {
     }
 
     fn add_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(title) = self
+        let Some(next) = self
             .schema(cx)
-            .into_iter()
+            .iter()
             .find(|property| property.kind == PropertyKind::Title)
+            .map(|title| Filter {
+                property: title.id,
+                condition: default_condition(&title.kind),
+            })
         else {
             return;
         };
-        let mut filters = self.filters(cx);
-        filters.push(Filter {
-            property: title.id,
-            condition: default_condition(&title.kind),
-        });
+        let mut filters = self.filters(cx).to_vec();
+        filters.push(next);
         self.store(filters, window, cx);
     }
 
     fn remove_filter(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let mut filters = self.filters(cx);
+        let mut filters = self.filters(cx).to_vec();
         if index >= filters.len() {
             return;
         }
@@ -183,14 +182,11 @@ impl FilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(found) = self
+        let condition = self
             .schema(cx)
-            .into_iter()
+            .iter()
             .find(|candidate| candidate.id == property)
-        else {
-            return;
-        };
-        let condition = Some((property, default_condition(&found.kind)));
+            .map(|found| (property, default_condition(&found.kind)));
         self.replace(index, condition, true, window, cx);
     }
 
@@ -201,19 +197,16 @@ impl FilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let filters = self.filters(cx);
-        let Some(filter) = filters.get(index) else {
+        let Some(filter) = self.filters(cx).get(index) else {
             return;
         };
-        let Some(property) = self
+        let property = filter.property;
+        let condition = self
             .schema(cx)
-            .into_iter()
-            .find(|candidate| candidate.id == filter.property)
-        else {
-            return;
-        };
-        let condition = with_operator(&property.kind, &filter.condition, operator)
-            .map(|condition| (filter.property, condition));
+            .iter()
+            .find(|candidate| candidate.id == property)
+            .and_then(|found| with_operator(&found.kind, &filter.condition, operator))
+            .map(|condition| (property, condition));
         self.replace(index, condition, true, window, cx);
     }
 
@@ -224,8 +217,7 @@ impl FilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let filters = self.filters(cx);
-        let Some(filter) = filters.get(index) else {
+        let Some(filter) = self.filters(cx).get(index) else {
             return;
         };
         let condition =
@@ -240,8 +232,7 @@ impl FilterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let filters = self.filters(cx);
-        let Some(filter) = filters.get(index) else {
+        let Some(filter) = self.filters(cx).get(index) else {
             return;
         };
         let condition =
@@ -323,10 +314,10 @@ impl FilterPanel {
             return;
         };
         let typed = input.read(cx).value().to_string();
-        let filters = self.filters(cx);
-        let Some(filter) = filters.get(index) else {
+        let Some(filter) = self.filters(cx).get(index) else {
             return;
         };
+        let property = filter.property;
         let (condition, invalid) = match operand_of(&filter.condition) {
             Operand::Text(_) => (with_text(&filter.condition, &typed), false),
             Operand::Number(_) => match parse_number(&typed) {
@@ -338,15 +329,19 @@ impl FilterPanel {
         if let Some(Some(row)) = self.inputs.get_mut(index) {
             row.invalid = invalid;
         }
-        let condition = condition.map(|condition| (filter.property, condition));
+        let condition = condition.map(|condition| (property, condition));
         self.replace(index, condition, false, window, cx);
         cx.notify();
     }
 
-    fn sync_inputs(&mut self, filters: &[Filter], window: &mut Window, cx: &mut Context<Self>) {
-        self.inputs.resize_with(filters.len(), || None);
-        for (index, filter) in filters.iter().enumerate() {
-            let wanted = operand_text(&filter.condition);
+    fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted: Vec<Option<String>> = self
+            .filters(cx)
+            .iter()
+            .map(|filter| operand_text(&filter.condition))
+            .collect();
+        self.inputs.resize_with(wanted.len(), || None);
+        for (index, wanted) in wanted.into_iter().enumerate() {
             match (wanted, self.inputs[index].as_ref()) {
                 (None, Some(_)) => self.inputs[index] = None,
                 (Some(text), None) => {
@@ -404,7 +399,7 @@ impl FilterPanel {
             )
             .dropdown_menu(move |menu, _, cx| {
                 let properties = panel.read(cx).schema(cx);
-                properties.into_iter().fold(menu, |menu, property| {
+                properties.iter().fold(menu, |menu, property| {
                     let panel = panel.clone();
                     let id = property.id;
                     menu.item(
@@ -486,11 +481,11 @@ impl FilterPanel {
             }
             Operand::Option(chosen) => {
                 let panel = cx.entity();
-                let options = options_of(&property.kind).to_vec();
-                let label = options
+                let label = options_of(&property.kind)
                     .iter()
                     .find(|option| option.id == chosen)
                     .map_or_else(|| "Select…".to_owned(), |option| option.name.clone());
+                let owned = property.id;
                 Some(
                     labeled(
                         Button::new(filter_value_id(index))
@@ -499,7 +494,13 @@ impl FilterPanel {
                             .w(px(140.)),
                         label,
                     )
-                    .dropdown_menu(move |menu, _, _| {
+                    .dropdown_menu(move |menu, _, cx| {
+                        let options = panel
+                            .read(cx)
+                            .schema(cx)
+                            .iter()
+                            .find(|candidate| candidate.id == owned)
+                            .map_or(&[][..], |found| options_of(&found.kind));
                         options.iter().fold(menu, |menu, option| {
                             let panel = panel.clone();
                             let id = option.id;
@@ -550,8 +551,8 @@ impl FilterPanel {
 
 impl Render for FilterPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_inputs(window, cx);
         let filters = self.filters(cx);
-        self.sync_inputs(&filters, window, cx);
         let schema = self.schema(cx);
         let rows: Vec<_> = filters
             .iter()

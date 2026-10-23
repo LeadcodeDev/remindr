@@ -1,16 +1,15 @@
 mod date;
 mod options;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{ActiveTheme as _, Selectable, Sizable as _, h_flex};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, ElementId, Entity,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, RenderOnce, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
-    prelude::FluentBuilder as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, RenderOnce,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use remindr_core::application::{Changes, Command};
 use remindr_core::domain::{
@@ -21,10 +20,10 @@ use remindr_core::domain::{
 use self::date::DatePanel;
 use self::options::OptionsPicker;
 use super::format::{Parsed, date_text, format_number, parse_number, plain_number};
-use super::ids::{cell_id, cell_text_id, open_row_id};
+use super::ids::{cell_id, cell_text_id};
 use super::tags::option_tag;
-use crate::app::{NavigatorHandle, Route, WorkspaceModel, commands};
-use crate::theme::{TABLE_ROW, UI_TEXT, UI_TEXT_SMALL};
+use crate::app::{WorkspaceModel, commands};
+use crate::theme::{TABLE_ROW, UI_TEXT};
 
 pub struct Done;
 
@@ -76,7 +75,16 @@ pub struct Cell {
     property: PropertyId,
     mode: Mode,
     invalid: bool,
+    inset: Pixels,
     _subscription: Subscription,
+}
+
+#[derive(Clone, Copy)]
+enum Shape {
+    Text(Text),
+    Options { multiple: bool },
+    Date,
+    Checkbox,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -113,11 +121,19 @@ impl Cell {
             property,
             mode: Mode::Idle,
             invalid: false,
+            inset: px(0.),
             _subscription: subscription,
         }
     }
 
-    fn definition(&self, cx: &App) -> Option<Property> {
+    pub fn set_inset(&mut self, inset: Pixels, cx: &mut Context<Self>) {
+        if self.inset != inset {
+            self.inset = inset;
+            cx.notify();
+        }
+    }
+
+    fn definition<'a>(&self, cx: &'a App) -> Option<&'a Property> {
         self.model
             .read(cx)
             .workspace()
@@ -126,15 +142,26 @@ impl Cell {
             .properties
             .iter()
             .find(|property| property.id == self.property)
-            .cloned()
     }
 
-    fn value(&self, cx: &App) -> Option<PropertyValue> {
+    fn shape(&self, cx: &App) -> Option<Shape> {
+        Some(match &self.definition(cx)?.kind {
+            PropertyKind::Title => Shape::Text(Text::Title),
+            PropertyKind::Text => Shape::Text(Text::Plain),
+            PropertyKind::Url => Shape::Text(Text::Link),
+            PropertyKind::Number { format } => Shape::Text(Text::Number(*format)),
+            PropertyKind::Select { .. } => Shape::Options { multiple: false },
+            PropertyKind::MultiSelect { .. } => Shape::Options { multiple: true },
+            PropertyKind::Date => Shape::Date,
+            PropertyKind::Checkbox => Shape::Checkbox,
+        })
+    }
+
+    fn value<'a>(&self, cx: &'a App) -> Option<&'a PropertyValue> {
         self.model
             .read(cx)
             .workspace()
             .value(self.row, self.property)
-            .cloned()
     }
 
     fn title(&self, cx: &App) -> String {
@@ -150,19 +177,9 @@ impl Cell {
         match (text, self.value(cx)) {
             (Text::Title, _) => self.title(cx),
             (Text::Plain, Some(PropertyValue::Text(value)))
-            | (Text::Link, Some(PropertyValue::Url(value))) => value,
-            (Text::Number(_), Some(PropertyValue::Number(value))) => plain_number(value),
+            | (Text::Link, Some(PropertyValue::Url(value))) => value.clone(),
+            (Text::Number(_), Some(PropertyValue::Number(value))) => plain_number(*value),
             _ => String::new(),
-        }
-    }
-
-    fn text_kind(kind: &PropertyKind) -> Option<Text> {
-        match kind {
-            PropertyKind::Title => Some(Text::Title),
-            PropertyKind::Text => Some(Text::Plain),
-            PropertyKind::Url => Some(Text::Link),
-            PropertyKind::Number { format } => Some(Text::Number(*format)),
-            _ => None,
         }
     }
 
@@ -273,14 +290,13 @@ impl Cell {
             cx.notify();
             return;
         }
-        let Some(definition) = self.definition(cx) else {
+        let Some(shape) = self.shape(cx) else {
             return;
         };
         let (model, database, row, property) =
             (self.model.clone(), self.database, self.row, self.property);
-        match definition.kind {
-            PropertyKind::Select { .. } | PropertyKind::MultiSelect { .. } => {
-                let multiple = matches!(definition.kind, PropertyKind::MultiSelect { .. });
+        match shape {
+            Shape::Options { multiple } => {
                 let picker = cx.new(|cx| {
                     OptionsPicker::new(model, database, row, property, multiple, window, cx)
                 });
@@ -294,7 +310,7 @@ impl Cell {
                     _subscription: subscription,
                 };
             }
-            PropertyKind::Date => {
+            Shape::Date => {
                 let panel = cx.new(|cx| DatePanel::new(model, row, property, window, cx));
                 let subscription = cx.subscribe(&panel, |this, _, _: &Done, cx| {
                     this.mode = Mode::Idle;
@@ -305,20 +321,9 @@ impl Cell {
                     _subscription: subscription,
                 };
             }
-            _ => return,
+            Shape::Text(_) | Shape::Checkbox => return,
         }
         cx.notify();
-    }
-
-    fn open_page(&mut self, cx: &mut Context<Self>) {
-        let Some(navigator) = cx
-            .try_global::<NavigatorHandle>()
-            .map(|handle| handle.0.clone())
-        else {
-            return;
-        };
-        let row = self.row;
-        navigator.update(cx, |navigator, cx| navigator.open(Route::Page(row), cx));
     }
 
     fn on_text_click(
@@ -332,7 +337,7 @@ impl Cell {
             && event.modifiers().secondary()
             && let Some(PropertyValue::Url(url)) = self.value(cx)
         {
-            cx.open_url(&url);
+            cx.open_url(url);
             return;
         }
         self.begin_edit(text, window, cx);
@@ -340,13 +345,12 @@ impl Cell {
 
     fn text_cell(&mut self, text: Text, cx: &mut Context<Self>) -> AnyElement {
         let id = cell_id(self.row, self.property);
-        let raw = self.raw_text(text, cx);
         let display = match text {
             Text::Number(format) => match self.value(cx) {
-                Some(PropertyValue::Number(value)) => format_number(value, format),
+                Some(PropertyValue::Number(value)) => format_number(*value, format),
                 _ => String::new(),
             },
-            _ => raw,
+            _ => self.raw_text(text, cx),
         };
         let label = if text == Text::Title && display.is_empty() {
             "Untitled".to_owned()
@@ -360,9 +364,7 @@ impl Cell {
         let invalid = self.invalid;
         let danger = cx.theme().danger;
         let muted = cx.theme().muted_foreground;
-        let background = cx.theme().background;
         let link = cx.theme().link;
-        let group = SharedString::from(format!("cell-{}", self.row.as_uuid()));
         let body = match editing {
             Some(input) => div()
                 .flex_1()
@@ -401,10 +403,9 @@ impl Cell {
             .test_support()
             .aria_label(label)
             .when(invalid, |this| this.aria_value("invalid"))
-            .group(group.clone())
-            .relative()
             .size_full()
-            .px_2()
+            .pl(px(8.) + self.inset)
+            .pr_2()
             .items_center()
             .overflow_hidden()
             .cursor_text()
@@ -415,27 +416,6 @@ impl Cell {
                 this.on_text_click(text, event, window, cx);
             }))
             .child(body)
-            .when(text == Text::Title, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right_1()
-                        .flex()
-                        .items_center()
-                        .bg(background)
-                        .opacity(0.)
-                        .group_hover(group, |style| style.opacity(1.))
-                        .child(
-                            Button::new(open_row_id(self.row))
-                                .ghost()
-                                .xsmall()
-                                .child(div().text_size(UI_TEXT_SMALL).child("Open"))
-                                .on_click(cx.listener(|this, _, _, cx| this.open_page(cx))),
-                        ),
-                )
-            })
             .into_any_element()
     }
 
@@ -482,9 +462,25 @@ impl Cell {
             .into_any_element()
     }
 
-    fn options_cell(&mut self, options: &[SelectOption], cx: &mut Context<Self>) -> AnyElement {
-        let chosen: Vec<&SelectOption> = match self.value(cx) {
-            Some(PropertyValue::Select(id)) => options.iter().filter(|o| o.id == id).collect(),
+    fn options_cell(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let (label, tags) = self.chosen_tags(cx);
+        self.popover_cell(label, tags, cx)
+    }
+
+    fn chosen_tags(&self, cx: &App) -> (String, Vec<AnyElement>) {
+        let options: &[SelectOption] = match self.definition(cx).map(|property| &property.kind) {
+            Some(PropertyKind::Select { options } | PropertyKind::MultiSelect { options }) => {
+                options
+            }
+            _ => &[],
+        };
+        let chosen: Vec<&SelectOption> = match self
+            .model
+            .read(cx)
+            .workspace()
+            .value(self.row, self.property)
+        {
+            Some(PropertyValue::Select(id)) => options.iter().filter(|o| o.id == *id).collect(),
             Some(PropertyValue::MultiSelect(ids)) => ids
                 .iter()
                 .filter_map(|id| options.iter().find(|option| option.id == *id))
@@ -500,12 +496,12 @@ impl Cell {
             .into_iter()
             .map(|option| option_tag(option).into_any_element())
             .collect();
-        self.popover_cell(label, tags, cx)
+        (label, tags)
     }
 
     fn date_cell(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let text = match self.value(cx) {
-            Some(PropertyValue::Date(date)) => date_text(date),
+            Some(PropertyValue::Date(date)) => date_text(*date),
             _ => String::new(),
         };
         self.popover_cell(text.clone(), vec![div().child(text).into_any_element()], cx)
@@ -537,18 +533,12 @@ impl Cell {
 
 impl Render for Cell {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(definition) = self.definition(cx) else {
-            return div().size_full().into_any_element();
-        };
-        if let Some(text) = Self::text_kind(&definition.kind) {
-            return self.text_cell(text, cx);
-        }
-        match &definition.kind {
-            PropertyKind::Select { options } | PropertyKind::MultiSelect { options } => {
-                self.options_cell(options, cx)
-            }
-            PropertyKind::Date => self.date_cell(cx),
-            _ => self.checkbox_cell(cx),
+        match self.shape(cx) {
+            None => div().size_full().into_any_element(),
+            Some(Shape::Text(text)) => self.text_cell(text, cx),
+            Some(Shape::Options { .. }) => self.options_cell(cx),
+            Some(Shape::Date) => self.date_cell(cx),
+            Some(Shape::Checkbox) => self.checkbox_cell(cx),
         }
     }
 }
@@ -603,7 +593,7 @@ mod tests {
     use gpui_kit::{
         AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Modifiers,
         ParentElement as _, Render, Styled as _, TestAppContext, TestSupportExt as _, Window, div,
-        px,
+        point, px,
     };
     use remindr_core::application::Command;
     use remindr_core::domain::{
@@ -612,9 +602,9 @@ mod tests {
     };
 
     use super::Cell;
+    use crate::app::WorkspaceModel;
     use crate::app::testing::{Ui, execute, model_with};
-    use crate::app::{Route, WorkspaceModel};
-    use crate::database::ids::{cell_id, open_row_id, option_id};
+    use crate::database::ids::{cell_id, option_id};
     use crate::database::testing::{UiExt as _, add_option, one, open, value_of};
 
     struct Host {
@@ -626,7 +616,14 @@ mod tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .p_4()
-                .child(div().w(px(260.)).h(px(32.)).child(self.cell.clone()))
+                .child(
+                    div()
+                        .id("slot")
+                        .test_support()
+                        .w(px(260.))
+                        .h(px(32.))
+                        .child(self.cell.clone()),
+                )
                 .child(
                     div()
                         .id("elsewhere")
@@ -720,7 +717,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn title_cell_edits_the_row_text_and_opens_the_page(cx: &mut TestAppContext) {
+    fn title_cell_edits_the_row_text(cx: &mut TestAppContext) {
         let mut made = None;
         let model = model_with(cx, |session| {
             made = Some(one(session, PropertyKind::Text, None));
@@ -749,9 +746,6 @@ mod tests {
             );
         });
         assert_eq!(ui.label(cx, id).as_deref(), Some("Renamed"));
-        ui.hover(cx, cell_id(made.row, title));
-        ui.click(cx, open_row_id(made.row));
-        assert_eq!(ui.route(cx), Some(Route::Page(made.row)));
     }
 
     #[gpui_kit::test]
@@ -870,6 +864,34 @@ mod tests {
             value_of(&model, cx, one.row, one.property),
             Some(PropertyValue::Select(options[0].id))
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_select_cell_opens_from_anywhere_in_its_width(cx: &mut TestAppContext) {
+        let (_, ui, one) = fixture(
+            cx,
+            PropertyKind::Select {
+                options: Vec::new(),
+            },
+            None,
+        );
+        let id = cell_id(one.row, one.property);
+        ui.with(cx, |window, cx| {
+            window.click_at("slot", point(px(236.), px(16.)), cx);
+        });
+        ui.settle(cx);
+        assert_eq!(ui.find(cx, id).unwrap().expanded(), Some(true));
+    }
+
+    #[gpui_kit::test]
+    fn a_date_cell_opens_from_anywhere_in_its_width(cx: &mut TestAppContext) {
+        let (_, ui, one) = fixture(cx, PropertyKind::Date, None);
+        let id = cell_id(one.row, one.property);
+        ui.with(cx, |window, cx| {
+            window.click_at("slot", point(px(236.), px(16.)), cx);
+        });
+        ui.settle(cx);
+        assert_eq!(ui.find(cx, id).unwrap().expanded(), Some(true));
     }
 
     #[gpui_kit::test]

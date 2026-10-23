@@ -100,11 +100,7 @@ pub fn from_naive(date: NaiveDate) -> Option<CalendarDate> {
 
 #[must_use]
 pub fn today() -> Option<CalendarDate> {
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    let seconds = i64::try_from(elapsed.as_secs()).ok()?;
-    chrono::DateTime::from_timestamp(seconds, 0).and_then(|moment| from_naive(moment.date_naive()))
+    from_naive(chrono::Local::now().date_naive())
 }
 
 #[must_use]
@@ -126,6 +122,7 @@ mod tests {
 
     use super::{
         Parsed, date_text, format_number, from_naive, next_option_color, parse_number, to_naive,
+        today,
     };
 
     #[test]
@@ -155,6 +152,14 @@ mod tests {
         assert_eq!(parse_number("abc"), Parsed::Invalid);
         assert_eq!(parse_number("inf"), Parsed::Invalid);
         assert_eq!(parse_number("NaN"), Parsed::Invalid);
+    }
+
+    #[test]
+    fn today_is_the_local_date() {
+        let before = from_naive(chrono::Local::now().date_naive());
+        let today = today();
+        let after = from_naive(chrono::Local::now().date_naive());
+        assert!(today == before || today == after);
     }
 
     #[test]

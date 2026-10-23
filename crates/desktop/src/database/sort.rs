@@ -50,22 +50,20 @@ impl SortPanel {
         }
     }
 
-    fn sorts(&self, cx: &gpui_kit::App) -> Vec<Sort> {
+    fn sorts<'a>(&self, cx: &'a gpui_kit::App) -> &'a [Sort] {
         self.model
             .read(cx)
             .workspace()
             .view(self.view)
-            .map(|view| view.sorts.clone())
-            .unwrap_or_default()
+            .map_or(&[][..], |view| view.sorts.as_slice())
     }
 
-    fn schema(&self, cx: &gpui_kit::App) -> Vec<Property> {
+    fn schema<'a>(&self, cx: &'a gpui_kit::App) -> &'a [Property] {
         self.model
             .read(cx)
             .workspace()
             .database(self.database)
-            .map(|database| database.schema.properties.clone())
-            .unwrap_or_default()
+            .map_or(&[][..], |database| database.schema.properties.as_slice())
     }
 
     fn store(&mut self, sorts: Vec<Sort>, window: &mut Window, cx: &mut Context<Self>) {
@@ -82,23 +80,25 @@ impl SortPanel {
     }
 
     fn add_sort(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut sorts = self.sorts(cx);
-        let free = self
+        let sorted = self.sorts(cx);
+        let Some(free) = self
             .schema(cx)
-            .into_iter()
-            .find(|property| sorts.iter().all(|sort| sort.property != property.id));
-        let Some(property) = free else {
+            .iter()
+            .find(|property| sorted.iter().all(|sort| sort.property != property.id))
+            .map(|property| property.id)
+        else {
             return;
         };
+        let mut sorts = sorted.to_vec();
         sorts.push(Sort {
-            property: property.id,
+            property: free,
             direction: SortDirection::Ascending,
         });
         self.store(sorts, window, cx);
     }
 
     fn remove_sort(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let mut sorts = self.sorts(cx);
+        let mut sorts = self.sorts(cx).to_vec();
         if index < sorts.len() {
             sorts.remove(index);
             self.store(sorts, window, cx);
@@ -112,7 +112,7 @@ impl SortPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut sorts = self.sorts(cx);
+        let mut sorts = self.sorts(cx).to_vec();
         if let Some(sort) = sorts.get_mut(index) {
             sort.property = property;
             self.store(sorts, window, cx);
@@ -120,7 +120,7 @@ impl SortPanel {
     }
 
     fn flip(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let mut sorts = self.sorts(cx);
+        let mut sorts = self.sorts(cx).to_vec();
         if let Some(sort) = sorts.get_mut(index) {
             sort.direction = match sort.direction {
                 SortDirection::Ascending => SortDirection::Descending,
@@ -155,6 +155,7 @@ impl Render for SortPanel {
                     || ("Unknown".to_owned(), IconName::File),
                     |property| (property.name.clone(), kind_icon(&property.kind)),
                 );
+                let (model, database) = (self.model.clone(), self.database);
                 let ascending = sort.direction == SortDirection::Ascending;
                 h_flex()
                     .id(sort_row_id(index))
@@ -176,8 +177,14 @@ impl Render for SortPanel {
                                     .child(div().truncate().child(name)),
                             )
                             .dropdown_menu({
-                                let schema = schema.clone();
-                                move |menu, _, _| {
+                                move |menu, _, cx| {
+                                    let schema = model
+                                        .read(cx)
+                                        .workspace()
+                                        .database(database)
+                                        .map_or(&[][..], |found| {
+                                            found.schema.properties.as_slice()
+                                        });
                                     schema.iter().fold(menu, |menu, property| {
                                         let panel = panel.clone();
                                         let id = property.id;

@@ -1,9 +1,11 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::scroll::{ScrollableElement as _, ScrollableMask};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, ElementId, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, TestSupportExt as _, Window, div, px,
+    AnyElement, App, AppContext as _, Axis, Context, ElementId, Entity, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
+    px,
 };
 use remindr_core::application::{Changes, Command};
 use remindr_core::domain::{
@@ -15,9 +17,9 @@ use super::changes::touches;
 use super::format::{date_text, format_number};
 use super::ids::{card_id, card_prop_id, group_id, new_card_id};
 use super::tags::option_tag;
-use super::ui::icon_label;
+use super::ui::{icon_label, open_page};
 use crate::app::navigation::page_title;
-use crate::app::{NavigatorHandle, Route, WorkspaceModel, commands};
+use crate::app::{WorkspaceModel, commands};
 use crate::theme::{BOARD_CARD_PADDING, BOARD_COLUMN_WIDTH, RADIUS_LG, UI_TEXT, UI_TEXT_SMALL};
 
 const COLUMN_MAX_HEIGHT: f32 = 520.;
@@ -53,6 +55,7 @@ pub struct BoardView {
     model: Entity<WorkspaceModel>,
     database: DatabaseId,
     view: ViewId,
+    scroll: ScrollHandle,
     _subscription: Subscription,
 }
 
@@ -74,11 +77,12 @@ impl BoardView {
             model,
             database,
             view,
+            scroll: ScrollHandle::new(),
             _subscription: subscription,
         }
     }
 
-    fn group_by(&self, cx: &Context<Self>) -> Option<PropertyId> {
+    fn group_by(&self, cx: &App) -> Option<PropertyId> {
         match self.model.read(cx).workspace().view(self.view)?.kind {
             ViewKind::Board { group_by } => Some(group_by),
             ViewKind::Table => None,
@@ -132,16 +136,6 @@ impl BoardView {
         );
     }
 
-    fn open_page(&mut self, row: BlockId, cx: &mut Context<Self>) {
-        let Some(navigator) = cx
-            .try_global::<NavigatorHandle>()
-            .map(|handle| handle.0.clone())
-        else {
-            return;
-        };
-        navigator.update(cx, |navigator, cx| navigator.open(Route::Page(row), cx));
-    }
-
     fn value_view(
         property: &Property,
         value: Option<&PropertyValue>,
@@ -171,16 +165,11 @@ impl BoardView {
                     div().text_color(muted).child(text).into_any_element(),
                 )
             }
-            (PropertyKind::Checkbox, PropertyValue::Checkbox(checked)) => (
-                checked.to_string(),
+            (PropertyKind::Checkbox, PropertyValue::Checkbox(true)) => (
+                "true".to_owned(),
                 h_flex()
                     .text_color(muted)
-                    .gap_1()
-                    .child(Icon::new(IconName::Check).size_3().opacity(if *checked {
-                        1.
-                    } else {
-                        0.2
-                    }))
+                    .child(Icon::new(IconName::Check).size_3())
                     .into_any_element(),
             ),
             (PropertyKind::Select { options }, PropertyValue::Select(id)) => {
@@ -218,9 +207,9 @@ impl BoardView {
         &self,
         row: BlockId,
         group: Option<OptionId>,
-        shown: &[Property],
+        shown: &[&Property],
         sorted: bool,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> AnyElement {
         let workspace = self.model.read(cx).workspace();
         let title = workspace.block(row).map(page_title).unwrap_or_default();
@@ -261,7 +250,7 @@ impl BoardView {
             .border_color(border)
             .bg(background)
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.open_page(row, cx)))
+            .on_click(move |_, _, cx: &mut App| open_page(row, cx))
             .on_drag(drag, |drag, _, _, cx| {
                 let title = drag.title.clone();
                 cx.new(|_| DragPreview { title })
@@ -285,9 +274,9 @@ impl BoardView {
         &self,
         group: &BoardGroup,
         property: &Property,
-        shown: &[Property],
+        shown: &[&Property],
         sorted: bool,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> AnyElement {
         let options = match &property.kind {
             PropertyKind::Select { options } => options.as_slice(),
@@ -384,16 +373,14 @@ impl Render for BoardView {
         let group_by = self.group_by(cx);
         let schema = workspace
             .database(self.database)
-            .map(|database| database.schema.properties.clone())
-            .unwrap_or_default();
-        let shown: Vec<Property> = view
+            .map_or(&[][..], |database| database.schema.properties.as_slice());
+        let shown: Vec<&Property> = view
             .map(|view| {
                 view.visible
                     .iter()
                     .filter(|id| Some(**id) != group_by)
                     .filter_map(|id| schema.iter().find(|property| property.id == *id))
                     .filter(|property| property.kind != PropertyKind::Title)
-                    .cloned()
                     .collect()
             })
             .unwrap_or_default();
@@ -406,29 +393,48 @@ impl Render for BoardView {
                 .collect(),
             None => Vec::new(),
         };
-        h_flex()
+        div()
             .id("board")
-            .test_support()
+            .relative()
             .w_full()
-            .gap_3()
-            .items_start()
-            .overflow_x_scroll()
-            .pb_2()
-            .children(columns)
+            .child(
+                div()
+                    .id("board-area")
+                    .w_full()
+                    .flex()
+                    .overflow_hidden()
+                    .track_scroll(&self.scroll)
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .min_w_full()
+                            .gap_3()
+                            .items_start()
+                            .pb_3()
+                            .children(columns),
+                    ),
+            )
+            .child(ScrollableMask::new(Axis::Horizontal, &self.scroll).id("board-scroll"))
+            .horizontal_scrollbar(&self.scroll)
+            .test_support()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{Entity, TestAppContext};
+    use gpui_kit::{Entity, ScrollDelta, TestAppContext, point, px};
     use remindr_core::application::Command;
-    use remindr_core::domain::{BlockId, PropertyValue, Sort, SortDirection, ViewId, ViewKind};
+    use remindr_core::domain::{
+        BlockId, PropertyKind, PropertyValue, Sort, SortDirection, ViewId, ViewKind,
+    };
 
     use crate::app::testing::{Ui, execute, model_with};
     use crate::app::{Route, WorkspaceModel};
     use crate::database::ids::{card_id, card_prop_id, group_id, new_card_id};
-    use crate::database::testing::{Tasks, UiExt as _, add_row, open_block, tasks, value_of};
+    use crate::database::testing::{
+        Tasks, UiExt as _, add_row, open_block, open_block_in_page, tasks, value_of,
+    };
 
     type Model = Entity<WorkspaceModel>;
 
@@ -615,6 +621,85 @@ mod tests {
             value_of(&model, cx, tasks.rows[3], tasks.status),
             Some(PropertyValue::Select(tasks.todo))
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_vertical_wheel_over_the_board_scrolls_the_page_not_the_board(cx: &mut TestAppContext) {
+        let (model, board) = board_model(cx);
+        let tasks = &board.tasks;
+        let (ui, page) = open_block_in_page(cx, &model, tasks.block, tasks.database, px(600.));
+        ui.with(cx, |window, cx| {
+            window.within("view-tabs").click(1usize, cx)
+        });
+        ui.settle(cx);
+        let done = group_id(Some(tasks.done));
+        let before = ui.find(cx, done.clone()).unwrap().bounds().origin.x;
+        assert!(before > px(300.), "{before:?}");
+        ui.with(cx, |window, cx| {
+            window.scroll(
+                card_id(tasks.rows[0]),
+                ScrollDelta::Lines(point(0., -3.)),
+                cx,
+            );
+        });
+        ui.settle(cx);
+        assert_eq!(ui.find(cx, done.clone()).unwrap().bounds().origin.x, before);
+        assert!(page.offset().y < px(0.), "{:?}", page.offset());
+        ui.with(cx, |window, cx| {
+            window.scroll(
+                card_id(tasks.rows[0]),
+                ScrollDelta::Lines(point(-3., 0.)),
+                cx,
+            );
+        });
+        ui.settle(cx);
+        let after = ui.find(cx, done).unwrap().bounds().origin.x;
+        assert!(after < before - px(20.), "{before:?} {after:?}");
+    }
+
+    #[gpui_kit::test]
+    fn cards_show_a_check_mark_only_for_checked_boxes(cx: &mut TestAppContext) {
+        let (model, board) = board_model(cx);
+        let tasks = &board.tasks;
+        execute(
+            &model,
+            cx,
+            Command::AddProperty {
+                database: tasks.database,
+                name: "Shipped".to_owned(),
+                kind: PropertyKind::Checkbox,
+            },
+        );
+        let shipped = model.read_with(cx, |model, _| {
+            model
+                .workspace()
+                .database(tasks.database)
+                .unwrap()
+                .schema
+                .properties
+                .last()
+                .unwrap()
+                .id
+        });
+        for (row, value) in [(tasks.rows[0], true), (tasks.rows[1], false)] {
+            execute(
+                &model,
+                cx,
+                Command::SetValue {
+                    row,
+                    property: shipped,
+                    value: Some(PropertyValue::Checkbox(value)),
+                },
+            );
+        }
+        let ui = show_board(cx, &model, &board);
+        assert_eq!(
+            ui.label(cx, card_prop_id(tasks.rows[0], shipped))
+                .as_deref(),
+            Some("true")
+        );
+        assert!(!ui.exists(cx, card_prop_id(tasks.rows[1], shipped)));
+        assert!(!ui.exists(cx, card_prop_id(tasks.rows[2], shipped)));
     }
 
     #[gpui_kit::test]

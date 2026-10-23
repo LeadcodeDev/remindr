@@ -4,8 +4,8 @@ use gpui_kit::component::{ActiveTheme as _, Selectable, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, DismissEvent, ElementId, Entity, Focusable as _,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, RenderOnce,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
-    Window, prelude::FluentBuilder as _,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled as _, Subscription,
+    TestSupportExt as _, Window, prelude::FluentBuilder as _,
 };
 
 use crate::theme::{TABLE_HEADER, UI_TEXT};
@@ -138,9 +138,9 @@ where
         .overlay_closable(false)
         .mouse_button(MouseButton::Middle)
         .trigger(trigger)
+        .trigger_style(StyleRefinement::default().w_full())
         .content(move |_, window, cx| {
             owner.update(cx, |state, cx| state.menu(window, cx, &builder))
         })
-        .w_full()
         .into_any_element()
 }
