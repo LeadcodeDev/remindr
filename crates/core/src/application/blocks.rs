@@ -331,6 +331,9 @@ fn delete_range(
     } = select(workspace, from, to)?;
     let first_block = block_of(workspace, start.block)?;
     if first == last {
+        if holds_no_flow_text(&first_block.kind) {
+            return Ok(Built::default());
+        }
         let text = first_block.text.delete(start.offset..end.offset)?;
         return Ok(Built {
             transaction: set_text_if_changed(first_block, text),
@@ -341,8 +344,9 @@ fn delete_range(
     let last_block = block_of(workspace, end.block)?;
     let head = text_before(first_block, start.offset)?;
     let tail = text_after(last_block, end.offset)?;
-    let last_survives = first_block.kind.is_atomic() && !last_block.kind.is_atomic();
-    let removed_from = if first_block.kind.is_atomic() {
+    let last_survives =
+        holds_no_flow_text(&first_block.kind) && !holds_no_flow_text(&last_block.kind);
+    let removed_from = if holds_no_flow_text(&first_block.kind) {
         first
     } else {
         first + 1
@@ -375,7 +379,7 @@ fn delete_range(
     let (mut operations, caret) = if last_survives {
         let ops = set_text_if_changed(last_block, tail).operations().to_vec();
         (ops, Some(start_of(last_block.id)))
-    } else if first_block.kind.is_atomic() {
+    } else if holds_no_flow_text(&first_block.kind) {
         (Vec::new(), None)
     } else {
         let ops = set_text_if_changed(first_block, head.concat(&tail))
@@ -418,8 +422,12 @@ fn start_of(block: BlockId) -> TextPoint {
     TextPoint { block, offset: 0 }
 }
 
+fn holds_no_flow_text(kind: &BlockKind) -> bool {
+    kind.is_atomic() || matches!(kind, BlockKind::Page { .. })
+}
+
 fn text_before(block: &Block, offset: usize) -> Result<RichText, DomainError> {
-    if block.kind.is_atomic() {
+    if holds_no_flow_text(&block.kind) {
         Ok(RichText::default())
     } else {
         block.text.split_at(offset).map(|(head, _)| head)
@@ -427,7 +435,7 @@ fn text_before(block: &Block, offset: usize) -> Result<RichText, DomainError> {
 }
 
 fn text_after(block: &Block, offset: usize) -> Result<RichText, DomainError> {
-    if block.kind.is_atomic() {
+    if holds_no_flow_text(&block.kind) {
         Ok(RichText::default())
     } else {
         block.text.split_at(offset).map(|(_, tail)| tail)
@@ -478,7 +486,7 @@ fn indent(workspace: &Workspace, id: BlockId) -> Result<Built, DomainError> {
         .take_while(|sibling| sibling.id != id)
         .last()
         .ok_or(DomainError::InvalidParent)?;
-    if !previous.kind.accepts_children() {
+    if !previous.kind.accepts_children() || matches!(previous.kind, BlockKind::Page { .. }) {
         return Err(DomainError::ChildrenNotAllowed);
     }
     let target = Parent::Block(previous.id);
@@ -3047,5 +3055,68 @@ mod tests {
             },
         );
         assert!(built.transaction.is_empty());
+    }
+
+    #[test]
+    fn delete_range_ending_on_a_sub_page_link_kills_it_and_keeps_its_title() {
+        let mut workspace = notes(vec![
+            block(2, BlockKind::Text, under(1), 1, "hello"),
+            block(3, page(), under(1), 2, "Sub"),
+            block(4, BlockKind::Text, under(3), 1, "inside"),
+        ]);
+        run(
+            &mut workspace,
+            Command::DeleteRange {
+                start: at(2, 0),
+                end: at(3, 0),
+            },
+        );
+        assert_eq!(text_of(&workspace, 2), "");
+        assert_eq!(text_of(&workspace, 3), "Sub");
+        assert!(!alive(&workspace, 3));
+        assert!(!alive(&workspace, 4));
+    }
+
+    #[test]
+    fn delete_range_starting_on_a_sub_page_link_keeps_the_tail_of_the_text() {
+        let mut workspace = notes(vec![
+            block(2, page(), under(1), 1, "Sub"),
+            block(3, BlockKind::Text, under(1), 2, "text"),
+        ]);
+        let built = run(
+            &mut workspace,
+            Command::DeleteRange {
+                start: at(2, 0),
+                end: at(3, 2),
+            },
+        );
+        assert_eq!(text_of(&workspace, 2), "Sub");
+        assert!(!alive(&workspace, 2));
+        assert_eq!(text_of(&workspace, 3), "xt");
+        assert_eq!(built.caret, Some(at(3, 0)));
+    }
+
+    #[test]
+    fn delete_range_inside_a_sub_page_link_changes_nothing() {
+        let mut workspace = notes(vec![block(2, page(), under(1), 1, "Sub")]);
+        let built = run(
+            &mut workspace,
+            Command::DeleteRange {
+                start: at(2, 0),
+                end: at(2, 3),
+            },
+        );
+        assert!(built.transaction.is_empty());
+        assert_eq!(text_of(&workspace, 2), "Sub");
+    }
+
+    #[test]
+    fn indent_under_a_sub_page_link_is_rejected() {
+        let mut workspace = notes(vec![
+            block(2, page(), under(1), 1, "Sub"),
+            block(3, BlockKind::Text, under(1), 2, "B"),
+        ]);
+        let error = rejection(&mut workspace, Command::Indent { block: id(3) });
+        assert_eq!(error, DomainError::ChildrenNotAllowed);
     }
 }
