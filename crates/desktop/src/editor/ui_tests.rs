@@ -769,7 +769,7 @@ fn database_view_blocks_embed_the_registered_view(cx: &mut TestAppContext) {
     let fixture = Fixture::open(cx, &doc);
     cx.update(|cx| {
         let mut registry = EmbedRegistry::default();
-        registry.register(|_, _, _, cx| cx.new(|_| Embedded).into());
+        registry.register(|_, _, _, _, cx| cx.new(|_| Embedded).into());
         cx.set_global(registry);
     });
     let block = database_block(&fixture, cx, first);

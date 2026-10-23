@@ -275,10 +275,6 @@ impl BlockEditor {
         matches!(self.overlay, Some(Overlay::Picker(_) | Overlay::Link(_)))
     }
 
-    pub(super) fn overlay_open(&self) -> bool {
-        self.overlay.is_some()
-    }
-
     pub(super) fn dismiss_overlay(&mut self, cx: &mut Context<Self>) -> bool {
         if self.overlay.take().is_some() {
             cx.notify();

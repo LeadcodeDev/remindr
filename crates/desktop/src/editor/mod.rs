@@ -536,8 +536,9 @@ impl BlockEditor {
         if !cx.has_global::<EmbedRegistry>() {
             return None;
         }
+        let model = self.model.clone();
         let view = cx.update_global::<EmbedRegistry, _>(|registry, cx| {
-            registry.build(block, database, window, cx)
+            registry.build(model, block, database, window, cx)
         })?;
         self.embeds.insert(block, view.clone());
         Some(view)

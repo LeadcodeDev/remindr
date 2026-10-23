@@ -1,7 +1,10 @@
-use gpui_kit::{AnyView, App, Global, Window};
+use gpui_kit::{AnyView, App, Entity, Global, Window};
 use remindr_core::domain::{BlockId, DatabaseId};
 
-type EmbedFactory = Box<dyn Fn(BlockId, DatabaseId, &mut Window, &mut App) -> AnyView>;
+use crate::app::WorkspaceModel;
+
+type EmbedFactory =
+    Box<dyn Fn(Entity<WorkspaceModel>, BlockId, DatabaseId, &mut Window, &mut App) -> AnyView>;
 
 #[derive(Default)]
 pub struct EmbedRegistry {
@@ -13,7 +16,8 @@ impl Global for EmbedRegistry {}
 impl EmbedRegistry {
     pub fn register(
         &mut self,
-        factory: impl Fn(BlockId, DatabaseId, &mut Window, &mut App) -> AnyView + 'static,
+        factory: impl Fn(Entity<WorkspaceModel>, BlockId, DatabaseId, &mut Window, &mut App) -> AnyView
+        + 'static,
     ) {
         self.factory = Some(Box::new(factory));
     }
@@ -21,6 +25,7 @@ impl EmbedRegistry {
     #[must_use]
     pub fn build(
         &self,
+        model: Entity<WorkspaceModel>,
         block: BlockId,
         database: DatabaseId,
         window: &mut Window,
@@ -28,6 +33,6 @@ impl EmbedRegistry {
     ) -> Option<AnyView> {
         self.factory
             .as_ref()
-            .map(|factory| factory(block, database, window, cx))
+            .map(|factory| factory(model, block, database, window, cx))
     }
 }
