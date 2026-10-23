@@ -63,7 +63,28 @@ pub enum Condition {
     Checkbox(bool),
 }
 
+impl NumberCondition {
+    fn target(&self) -> Option<f64> {
+        match self {
+            Self::Eq(target)
+            | Self::Ne(target)
+            | Self::Lt(target)
+            | Self::Le(target)
+            | Self::Gt(target)
+            | Self::Ge(target) => Some(*target),
+            Self::IsEmpty | Self::IsNotEmpty => None,
+        }
+    }
+}
+
 impl Condition {
+    pub(crate) fn has_finite_numbers(&self) -> bool {
+        match self {
+            Self::Number(condition) => condition.target().is_none_or(f64::is_finite),
+            _ => true,
+        }
+    }
+
     pub(crate) fn fits(&self, kind: &PropertyKind) -> bool {
         matches!(
             (self, kind),

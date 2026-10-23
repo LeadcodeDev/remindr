@@ -473,6 +473,14 @@ fn add_row(world: &mut RemindrWorld, title: String, database: String) {
     add_row_with_title(world, id, &title);
 }
 
+#[when(expr = "I try to add a row to the database {string}")]
+fn try_add_row(world: &mut RemindrWorld, database: String) {
+    world.run(Command::AddRow {
+        database: world.database(&database),
+        values: Vec::new(),
+    });
+}
+
 #[when(expr = "I set the values of the row {string}:")]
 fn set_values(world: &mut RemindrWorld, step: &Step, row: String) {
     for record in records(step) {

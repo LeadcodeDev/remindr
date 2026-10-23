@@ -1883,3 +1883,266 @@ fn multi_select_filters_and_manual_order_survive_unrelated_commands() {
     assert_eq!(env.titles(), ["c", "a"]);
     let _ = b;
 }
+
+fn deleted_database() -> Env {
+    let mut env = Env::with_schema();
+    env.add_row("a");
+    env.run(Command::DeleteDatabase {
+        database: env.database,
+    });
+    env
+}
+
+#[test]
+fn add_row_to_a_deleted_database_is_rejected() {
+    let mut env = Env::bare();
+    let built = env.run(Command::CreateDatabase);
+    let Some(Created::Database(database)) = built.created.first().copied() else {
+        panic!("no database created");
+    };
+    env.run(Command::DeleteDatabase { database });
+    assert_eq!(
+        env.rejected(Command::AddRow {
+            database,
+            values: Vec::new()
+        }),
+        DomainError::UnknownDatabase(database)
+    );
+    assert_eq!(env.workspace.rows(database).count(), 0);
+}
+
+#[test]
+fn commands_naming_a_deleted_database_are_unknown_database() {
+    let mut env = deleted_database();
+    let database = env.database;
+    let notes = env.property("Notes");
+    let status = env.property("Status");
+    let todo = env.option("Status", "Todo");
+    let commands = vec![
+        Command::AddRow {
+            database,
+            values: Vec::new(),
+        },
+        Command::AddProperty {
+            database,
+            name: "x".to_owned(),
+            kind: PropertyKind::Text,
+        },
+        Command::RenameProperty {
+            database,
+            property: notes,
+            name: "x".to_owned(),
+        },
+        Command::ChangePropertyKind {
+            database,
+            property: notes,
+            kind: PropertyKind::Url,
+        },
+        Command::RemoveProperty {
+            database,
+            property: notes,
+        },
+        Command::MoveProperty {
+            database,
+            property: notes,
+            index: 1,
+        },
+        Command::AddSelectOption {
+            database,
+            property: status,
+            name: "x".to_owned(),
+            color: OptionColor::Default,
+        },
+        Command::RenameSelectOption {
+            database,
+            property: status,
+            option: todo,
+            name: "x".to_owned(),
+        },
+        Command::RemoveSelectOption {
+            database,
+            property: status,
+            option: todo,
+        },
+        Command::RenameDatabase {
+            database,
+            name: "x".to_owned(),
+        },
+        Command::SetDatabaseIcon {
+            database,
+            icon: None,
+        },
+        Command::InsertDatabaseView {
+            after: env.intro,
+            database,
+        },
+        Command::AddView {
+            block: env.embed,
+            name: "x".to_owned(),
+            kind: ViewKind::Table,
+        },
+    ];
+    for command in commands {
+        let label = format!("{command:?}");
+        assert_eq!(
+            env.rejected(command),
+            DomainError::UnknownDatabase(database),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn set_value_on_a_dead_row_is_unknown_block() {
+    let mut env = Env::with_schema();
+    let row = env.add_row("a");
+    env.run(Command::DeleteBlocks { blocks: vec![row] });
+    let property = env.property("Notes");
+    assert_eq!(
+        env.rejected(Command::SetValue {
+            row,
+            property,
+            value: text("x"),
+        }),
+        DomainError::UnknownBlock(row)
+    );
+}
+
+#[test]
+fn view_commands_on_a_view_of_a_dead_block_are_unknown_view() {
+    let mut env = Env::with_schema();
+    let [a, b, _] = three_rows(&mut env);
+    env.run(Command::AddView {
+        block: env.embed,
+        name: "Second".to_owned(),
+        kind: ViewKind::Table,
+    });
+    let status = env.property("Status");
+    let view = env.view;
+    env.run(Command::DeleteBlocks {
+        blocks: vec![env.embed],
+    });
+    let commands = vec![
+        Command::RenameView {
+            view,
+            name: "x".to_owned(),
+        },
+        Command::RemoveView { view },
+        Command::SetFilters {
+            view,
+            filters: Vec::new(),
+        },
+        Command::SetSorts {
+            view,
+            sorts: Vec::new(),
+        },
+        Command::SetVisibleProperties {
+            view,
+            properties: Vec::new(),
+        },
+        Command::SetColumnWidth {
+            view,
+            property: status,
+            width: 10,
+        },
+        Command::SetViewKind {
+            view,
+            kind: ViewKind::Table,
+        },
+        Command::MoveRow {
+            view,
+            row: a,
+            before: Some(b),
+        },
+        Command::MoveCard {
+            view,
+            row: a,
+            group: None,
+            before: None,
+        },
+    ];
+    for command in commands {
+        let label = format!("{command:?}");
+        assert_eq!(
+            env.rejected(command),
+            DomainError::UnknownView(view),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn view_blocks_inserted_after_a_dead_block_are_unknown_block() {
+    let mut env = Env::new();
+    let intro = env.intro;
+    env.run(Command::DeleteBlocks {
+        blocks: vec![intro],
+    });
+    assert_eq!(
+        env.rejected(Command::CreateDatabaseWithView { after: intro }),
+        DomainError::UnknownBlock(intro)
+    );
+    assert_eq!(
+        env.rejected(Command::InsertDatabaseView {
+            after: intro,
+            database: env.database
+        }),
+        DomainError::UnknownBlock(intro)
+    );
+}
+
+#[test]
+fn delete_database_on_a_deleted_database_is_an_empty_transaction() {
+    let mut env = deleted_database();
+    let before = env.workspace.clone();
+    let built = env.run(Command::DeleteDatabase {
+        database: env.database,
+    });
+    assert!(built.transaction.is_empty());
+    assert_eq!(env.workspace, before);
+    let unknown = DatabaseId::new();
+    assert_eq!(
+        env.rejected(Command::DeleteDatabase { database: unknown }),
+        DomainError::UnknownDatabase(unknown)
+    );
+}
+
+#[test]
+fn set_filters_rejects_non_finite_number_targets() {
+    let mut env = Env::with_schema();
+    let amount = env.property("Amount");
+    let constructors: [fn(f64) -> NumberCondition; 6] = [
+        NumberCondition::Eq,
+        NumberCondition::Ne,
+        NumberCondition::Lt,
+        NumberCondition::Le,
+        NumberCondition::Gt,
+        NumberCondition::Ge,
+    ];
+    for constructor in constructors {
+        for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let command = Command::SetFilters {
+                view: env.view,
+                filters: vec![Filter {
+                    property: amount,
+                    condition: Condition::Number(constructor(target)),
+                }],
+            };
+            assert_eq!(env.rejected(command), DomainError::ValueKindMismatch);
+        }
+    }
+    env.run(Command::SetFilters {
+        view: env.view,
+        filters: vec![
+            Filter {
+                property: amount,
+                condition: Condition::Number(NumberCondition::Eq(2.5)),
+            },
+            Filter {
+                property: amount,
+                condition: Condition::Number(NumberCondition::IsEmpty),
+            },
+        ],
+    });
+    assert_eq!(env.view_of(env.view).filters.len(), 2);
+}

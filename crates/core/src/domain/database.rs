@@ -192,11 +192,13 @@ fn check_value(kind: &PropertyKind, value: &PropertyValue) -> Result<(), DomainE
 }
 
 fn check_filter(filter: &Filter, kind: &PropertyKind) -> Result<(), DomainError> {
-    if filter.condition.fits(kind) {
-        Ok(())
-    } else {
-        Err(DomainError::ConditionKindMismatch)
+    if !filter.condition.fits(kind) {
+        return Err(DomainError::ConditionKindMismatch);
     }
+    if !filter.condition.has_finite_numbers() {
+        return Err(DomainError::ValueKindMismatch);
+    }
+    Ok(())
 }
 
 fn check_group_by(kind: &PropertyKind) -> Result<(), DomainError> {
@@ -215,27 +217,30 @@ impl Workspace {
         match operation {
             Operation::InsertDatabase(database) => self.insert_database(database),
             Operation::RemoveDatabase { database } => self.remove_database(*database),
-            Operation::SetDatabaseName { database, name } => {
-                let record = self.database_mut(*database)?;
-                let old = std::mem::replace(&mut record.name, name.clone());
+            Operation::SetDatabaseName { database: id, name } => {
+                let database = self.database_mut(*id)?;
+                let old = std::mem::replace(&mut database.name, name.clone());
                 Ok(Operation::SetDatabaseName {
-                    database: *database,
+                    database: *id,
                     name: old,
                 })
             }
-            Operation::SetDatabaseIcon { database, icon } => {
-                let record = self.database_mut(*database)?;
-                let old = std::mem::replace(&mut record.icon, icon.clone());
+            Operation::SetDatabaseIcon { database: id, icon } => {
+                let database = self.database_mut(*id)?;
+                let old = std::mem::replace(&mut database.icon, icon.clone());
                 Ok(Operation::SetDatabaseIcon {
-                    database: *database,
+                    database: *id,
                     icon: old,
                 })
             }
-            Operation::SetDatabaseAlive { database, alive } => {
-                let record = self.database_mut(*database)?;
-                let old = std::mem::replace(&mut record.alive, *alive);
+            Operation::SetDatabaseAlive {
+                database: id,
+                alive,
+            } => {
+                let database = self.database_mut(*id)?;
+                let old = std::mem::replace(&mut database.alive, *alive);
                 Ok(Operation::SetDatabaseAlive {
-                    database: *database,
+                    database: *id,
                     alive: old,
                 })
             }
@@ -327,7 +332,7 @@ impl Workspace {
     }
 
     fn remove_database(&mut self, id: DatabaseId) -> Result<Operation, DomainError> {
-        let Some(record) = self.databases.get(&id) else {
+        let Some(database) = self.databases.get(&id) else {
             return Err(DomainError::UnknownDatabase(id));
         };
         let has_rows = self
@@ -340,7 +345,7 @@ impl Workspace {
         let has_values = self
             .values
             .keys()
-            .any(|(_, property)| record.schema.find(*property).is_some());
+            .any(|(_, property)| database.schema.find(*property).is_some());
         if has_rows || is_shown || has_values {
             return Err(DomainError::StillReferenced);
         }
@@ -352,18 +357,18 @@ impl Workspace {
 
     fn put_property(
         &mut self,
-        database: DatabaseId,
+        id: DatabaseId,
         property: &Property,
         index: usize,
     ) -> Result<Operation, DomainError> {
-        let record = self
+        let database = self
             .databases
-            .get(&database)
-            .ok_or(DomainError::UnknownDatabase(database))?;
-        if self.property_id_taken_elsewhere(database, property.id) {
+            .get(&id)
+            .ok_or(DomainError::UnknownDatabase(id))?;
+        if self.property_id_taken_elsewhere(id, property.id) {
             return Err(DomainError::AlreadyExists);
         }
-        let titles_kept = record
+        let titles_kept = database
             .schema
             .properties
             .iter()
@@ -372,12 +377,12 @@ impl Workspace {
         if titles_kept + usize::from(property.kind.is_title()) != 1 {
             return Err(DomainError::TitleIsBlockText);
         }
-        if record.schema.find(property.id).is_some() {
+        if database.schema.find(property.id).is_some() {
             self.values
                 .iter()
-                .filter(|((_, id), _)| *id == property.id)
+                .filter(|((_, owner), _)| *owner == property.id)
                 .try_for_each(|(_, value)| check_value(&property.kind, value))?;
-            for view in self.database_views(database) {
+            for view in self.database_views(id) {
                 for filter in view.filters.iter().filter(|f| f.property == property.id) {
                     check_filter(filter, &property.kind)?;
                 }
@@ -386,22 +391,22 @@ impl Workspace {
                 }
             }
         }
-        let record = self.database_mut(database)?;
-        let previous = record
+        let database = self.database_mut(id)?;
+        let previous = database
             .schema
             .find(property.id)
             .map(|(old_index, _)| old_index)
-            .map(|old_index| (old_index, record.schema.properties.remove(old_index)));
-        let at = index.min(record.schema.properties.len());
-        record.schema.properties.insert(at, property.clone());
+            .map(|old_index| (old_index, database.schema.properties.remove(old_index)));
+        let at = index.min(database.schema.properties.len());
+        database.schema.properties.insert(at, property.clone());
         Ok(match previous {
             Some((old_index, old)) => Operation::PutProperty {
-                database,
+                database: id,
                 property: old,
                 index: old_index,
             },
             None => Operation::RemoveProperty {
-                database,
+                database: id,
                 property: property.id,
             },
         })
@@ -409,32 +414,32 @@ impl Workspace {
 
     fn remove_property(
         &mut self,
-        database: DatabaseId,
+        id: DatabaseId,
         property: PropertyId,
     ) -> Result<Operation, DomainError> {
-        let record = self
+        let database = self
             .databases
-            .get(&database)
-            .ok_or(DomainError::UnknownDatabase(database))?;
-        let (index, definition) = record
+            .get(&id)
+            .ok_or(DomainError::UnknownDatabase(id))?;
+        let (index, definition) = database
             .schema
             .find(property)
             .ok_or(DomainError::UnknownProperty(property))?;
         if definition.kind.is_title() {
             return Err(DomainError::TitleIsBlockText);
         }
-        let has_values = self.values.keys().any(|(_, id)| *id == property);
+        let has_values = self.values.keys().any(|(_, owner)| *owner == property);
         let is_referenced = self
-            .database_views(database)
+            .database_views(id)
             .iter()
             .any(|view| view.references(property));
         if has_values || is_referenced {
             return Err(DomainError::StillReferenced);
         }
-        let record = self.database_mut(database)?;
-        let removed = record.schema.properties.remove(index);
+        let database = self.database_mut(id)?;
+        let removed = database.schema.properties.remove(index);
         Ok(Operation::PutProperty {
-            database,
+            database: id,
             property: removed,
             index,
         })
@@ -445,15 +450,14 @@ impl Workspace {
             .blocks
             .get(&row)
             .ok_or(DomainError::UnknownBlock(row))?;
-        let (Parent::Database(database), BlockKind::Page { .. }) = (block.parent, &block.kind)
-        else {
+        let (Parent::Database(id), BlockKind::Page { .. }) = (block.parent, &block.kind) else {
             return Err(DomainError::InvalidParent);
         };
-        let record = self
+        let database = self
             .databases
-            .get(&database)
-            .ok_or(DomainError::UnknownDatabase(database))?;
-        let (_, definition) = record
+            .get(&id)
+            .ok_or(DomainError::UnknownDatabase(id))?;
+        let (_, definition) = database
             .schema
             .find(property)
             .ok_or(DomainError::UnknownProperty(property))?;

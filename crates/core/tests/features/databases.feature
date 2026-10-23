@@ -302,6 +302,9 @@ Feature: Databases
     And the database "Tasks" is not listed among the databases
     And the block "Tasks block" shows a placeholder
     And the view "Tasks block" shows no rows
+    When I try to add a row to the database "Tasks"
+    Then the command is rejected
+    And the workspace is unchanged
     When I undo
     Then the database "Tasks" is listed among the databases
     And the block "Tasks block" shows the database "Tasks"

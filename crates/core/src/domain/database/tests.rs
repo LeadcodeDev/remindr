@@ -1350,6 +1350,16 @@ fn operation_strategy(pool: &Pool) -> BoxedStrategy<Operation> {
             Operation::InsertDatabase(database(id, "d", properties))
         }),
         2 => any_database.prop_map(|database| Operation::RemoveDatabase { database }),
+        3 => proptest::sample::select(pool.rows.clone())
+            .prop_map(|block| Operation::RemoveBlock { block }),
+        3 => (proptest::sample::select(pool.rows.clone()), any::<bool>())
+            .prop_map(|(block, alive)| Operation::SetBlockAlive { block, alive }),
+        3 => proptest::sample::select(pool.rows.clone())
+            .prop_map(|block| Operation::SetKind { block, kind: BlockKind::Text }),
+        2 => proptest::sample::select(pool.blocks.clone())
+            .prop_map(|block| Operation::RemoveBlock { block }),
+        2 => proptest::sample::select(pool.blocks.clone())
+            .prop_map(|block| Operation::SetKind { block, kind: BlockKind::Text }),
     ]
     .boxed()
 }
@@ -1370,6 +1380,8 @@ proptest! {
             match workspace.apply(&Transaction::new(vec![operation])) {
                 Ok(inverse) => {
                     prop_assert_eq!(workspace.validate_databases(), Ok(()));
+                let reloaded = Workspace::from_snapshot(workspace.to_snapshot());
+                prop_assert_eq!(reloaded.as_ref(), Ok(&workspace));
                     let mut probe = workspace.clone();
                     prop_assert!(probe.apply(&inverse).is_ok());
                     prop_assert_eq!(&probe, &before);
@@ -1383,4 +1395,56 @@ proptest! {
         }
         prop_assert_eq!(workspace, initial);
     }
+}
+
+#[test]
+fn put_view_rejects_non_finite_number_conditions() {
+    let mut sample = Sample::new();
+    for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let conditions = [
+            NumberCondition::Eq(target),
+            NumberCondition::Ne(target),
+            NumberCondition::Lt(target),
+            NumberCondition::Le(target),
+            NumberCondition::Gt(target),
+            NumberCondition::Ge(target),
+        ];
+        for condition in conditions {
+            let edited = edited_view(&sample, |view| {
+                view.filters.push(Filter {
+                    property: sample.amount,
+                    condition: Condition::Number(condition),
+                });
+            });
+            assert_rejected(
+                &mut sample.workspace,
+                Operation::PutView(edited),
+                DomainError::ValueKindMismatch,
+            );
+        }
+    }
+    let edited = edited_view(&sample, |view| {
+        view.filters.push(Filter {
+            property: sample.amount,
+            condition: Condition::Number(NumberCondition::Ge(f64::MAX)),
+        });
+    });
+    sample
+        .workspace
+        .apply_database_operation(&Operation::PutView(edited))
+        .unwrap();
+}
+
+#[test]
+fn snapshot_with_a_non_finite_number_filter_is_rejected() {
+    let sample = Sample::new();
+    let mut snapshot = snapshot_of(&sample);
+    snapshot.views[0].filters.push(Filter {
+        property: sample.amount,
+        condition: Condition::Number(NumberCondition::Eq(f64::NAN)),
+    });
+    assert_eq!(
+        Workspace::from_snapshot(snapshot),
+        Err(DomainError::ValueKindMismatch)
+    );
 }

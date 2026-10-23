@@ -21,14 +21,20 @@ pub(crate) fn build(
         Command::InsertDatabaseView { after, database } => {
             insert_database_view(workspace, *after, *database, now)
         }
-        Command::RenameDatabase { database, name } => Ok(single(Operation::SetDatabaseName {
-            database: *database,
-            name: name.clone(),
-        })),
-        Command::SetDatabaseIcon { database, icon } => Ok(single(Operation::SetDatabaseIcon {
-            database: *database,
-            icon: icon.clone(),
-        })),
+        Command::RenameDatabase { database, name } => {
+            known_database(workspace, *database)?;
+            Ok(single(Operation::SetDatabaseName {
+                database: *database,
+                name: name.clone(),
+            }))
+        }
+        Command::SetDatabaseIcon { database, icon } => {
+            known_database(workspace, *database)?;
+            Ok(single(Operation::SetDatabaseIcon {
+                database: *database,
+                icon: icon.clone(),
+            }))
+        }
         Command::DeleteDatabase { database } => delete_database(workspace, *database),
         Command::AddProperty {
             database,
@@ -75,11 +81,14 @@ pub(crate) fn build(
             row,
             property,
             value,
-        } => Ok(single(Operation::SetValue {
-            row: *row,
-            property: *property,
-            value: value.clone(),
-        })),
+        } => {
+            live_block(workspace, *row)?;
+            Ok(single(Operation::SetValue {
+                row: *row,
+                property: *property,
+                value: value.clone(),
+            }))
+        }
         Command::AddView { block, name, kind } => add_view(workspace, *block, name, *kind),
         Command::RenameView { view, name } => edit_view(workspace, *view, |edited| {
             edited.name.clone_from(name);
@@ -152,7 +161,15 @@ fn operations_creating(operations: Vec<Operation>, created: Vec<Created>) -> Bui
 fn known_database(workspace: &Workspace, id: DatabaseId) -> Result<&Database, DomainError> {
     workspace
         .database(id)
+        .filter(|database| database.alive)
         .ok_or(DomainError::UnknownDatabase(id))
+}
+
+fn live_block(workspace: &Workspace, id: BlockId) -> Result<&Block, DomainError> {
+    workspace
+        .block(id)
+        .filter(|block| block.alive)
+        .ok_or(DomainError::UnknownBlock(id))
 }
 
 fn locate(
@@ -228,9 +245,7 @@ fn database_view_block(
     database: DatabaseId,
     now: Timestamp,
 ) -> Result<Block, DomainError> {
-    let anchor = workspace
-        .block(after)
-        .ok_or(DomainError::UnknownBlock(after))?;
+    let anchor = live_block(workspace, after)?;
     let upper = workspace
         .children
         .get(&anchor.parent)
@@ -287,17 +302,17 @@ fn create_database_with_view(
 fn insert_database_view(
     workspace: &Workspace,
     after: BlockId,
-    database: DatabaseId,
+    id: DatabaseId,
     now: Timestamp,
 ) -> Result<Built, DomainError> {
-    let record = known_database(workspace, database)?;
-    let block = database_view_block(workspace, after, database, now)?;
+    let database = known_database(workspace, id)?;
+    let block = database_view_block(workspace, after, id, now)?;
     let view = new_view(
         block.id,
         "Table",
         ViewKind::Table,
         SortKey::between(None, None),
-        property_ids(record),
+        property_ids(database),
     );
     let created = vec![Created::Block(block.id), Created::View(view.id)];
     Ok(operations_creating(
@@ -307,7 +322,12 @@ fn insert_database_view(
 }
 
 fn delete_database(workspace: &Workspace, database: DatabaseId) -> Result<Built, DomainError> {
-    known_database(workspace, database)?;
+    let existing = workspace
+        .database(database)
+        .ok_or(DomainError::UnknownDatabase(database))?;
+    if !existing.alive {
+        return Ok(Built::default());
+    }
     let mut operations = vec![Operation::SetDatabaseAlive {
         database,
         alive: false,
@@ -369,11 +389,11 @@ fn adjusted_views(
 
 fn add_property(
     workspace: &Workspace,
-    database: DatabaseId,
+    id: DatabaseId,
     name: &str,
     kind: &PropertyKind,
 ) -> Result<Built, DomainError> {
-    let record = known_database(workspace, database)?;
+    let database = known_database(workspace, id)?;
     if *kind == PropertyKind::Title {
         return Err(DomainError::TitleIsBlockText);
     }
@@ -382,14 +402,14 @@ fn add_property(
         name: name.to_owned(),
         kind: kind.clone(),
     };
-    let id = property.id;
+    let added = property.id;
     let mut operations = vec![Operation::PutProperty {
-        database,
+        database: id,
         property,
-        index: record.schema.properties.len(),
+        index: database.schema.properties.len(),
     }];
-    operations.extend(adjusted_views(workspace, database, |view| {
-        view.visible.push(id);
+    operations.extend(adjusted_views(workspace, id, |view| {
+        view.visible.push(added);
     }));
     Ok(self::operations(operations))
 }
@@ -653,27 +673,28 @@ fn add_view(
     name: &str,
     kind: ViewKind,
 ) -> Result<Built, DomainError> {
-    let owner = workspace
-        .block(block)
-        .ok_or(DomainError::UnknownBlock(block))?;
-    let BlockKind::DatabaseView { database } = owner.kind else {
+    let owner = live_block(workspace, block)?;
+    let BlockKind::DatabaseView { database: id } = owner.kind else {
         return Err(DomainError::InvalidParent);
     };
-    let record = known_database(workspace, database)?;
+    let database = known_database(workspace, id)?;
     let last = workspace.views(block).last().map(|view| &view.sort_key);
     let view = new_view(
         block,
         name,
         kind,
         SortKey::between(last, None),
-        property_ids(record),
+        property_ids(database),
     );
     let created = vec![Created::View(view.id)];
     Ok(operations_creating(vec![Operation::PutView(view)], created))
 }
 
 fn known_view(workspace: &Workspace, id: ViewId) -> Result<&View, DomainError> {
-    workspace.view(id).ok_or(DomainError::UnknownView(id))
+    workspace
+        .view(id)
+        .filter(|view| live_block(workspace, view.block).is_ok())
+        .ok_or(DomainError::UnknownView(id))
 }
 
 fn edit_view(
@@ -964,5 +985,7 @@ fn into_multi_select(
     }
 }
 
+#[cfg(test)]
+mod fuzz;
 #[cfg(test)]
 mod tests;
