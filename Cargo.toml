@@ -1,8 +1,0 @@
-[workspace.package]
-name = "remindr"
-version = "0.1.0"
-edition = "2024"
-
-[workspace]
-members = ["crates/gpui"]
-resolver = "2"
