@@ -25,6 +25,7 @@ use super::ids::{
 use super::toolbar::Dismiss;
 use super::ui::icon_label;
 use crate::app::{WorkspaceModel, commands};
+use crate::theme::{RADIUS, UI_TEXT, labeled};
 
 struct RowInput {
     input: Entity<InputState>,
@@ -397,6 +398,7 @@ impl FilterPanel {
                     .w_full()
                     .gap_1()
                     .items_center()
+                    .text_size(UI_TEXT)
                     .child(Icon::new(super::kinds::kind_icon(&current.kind)).size_3())
                     .child(div().truncate().child(current.name.clone())),
             )
@@ -430,28 +432,30 @@ impl FilterPanel {
         let panel = cx.entity();
         let current = operator_of(condition);
         let choices = operators(kind);
-        Button::new(filter_condition_id(index))
-            .ghost()
-            .small()
-            .w(px(130.))
-            .label(current.label())
-            .dropdown_menu(move |menu, _, _| {
-                choices.iter().fold(menu, |menu, operator| {
-                    let panel = panel.clone();
-                    let operator = *operator;
-                    menu.item(
-                        PopupMenuItem::new(operator.label())
-                            .checked(operator == current)
-                            .on_click(move |_, window, cx| {
-                                panel.update(cx, |this, cx| {
-                                    this.set_operator(index, operator, window, cx);
-                                });
-                            }),
-                    )
-                })
+        labeled(
+            Button::new(filter_condition_id(index))
+                .ghost()
+                .small()
+                .w(px(130.)),
+            current.label(),
+        )
+        .dropdown_menu(move |menu, _, _| {
+            choices.iter().fold(menu, |menu, operator| {
+                let panel = panel.clone();
+                let operator = *operator;
+                menu.item(
+                    PopupMenuItem::new(operator.label())
+                        .checked(operator == current)
+                        .on_click(move |_, window, cx| {
+                            panel.update(cx, |this, cx| {
+                                this.set_operator(index, operator, window, cx);
+                            });
+                        }),
+                )
             })
-            .on_open_change(self.tracker(cx))
-            .into_any_element()
+        })
+        .on_open_change(self.tracker(cx))
+        .into_any_element()
     }
 
     fn value_editor(
@@ -472,11 +476,11 @@ impl FilterPanel {
                         .test_support()
                         .flex_1()
                         .min_w_0()
-                        .rounded(px(4.))
+                        .rounded(RADIUS)
                         .when(row.invalid, |this| {
                             this.aria_value("invalid").border_1().border_color(danger)
                         })
-                        .child(Input::new(&row.input).small())
+                        .child(Input::new(&row.input).small().text_size(UI_TEXT))
                         .into_any_element(),
                 )
             }
@@ -488,28 +492,30 @@ impl FilterPanel {
                     .find(|option| option.id == chosen)
                     .map_or_else(|| "Select…".to_owned(), |option| option.name.clone());
                 Some(
-                    Button::new(filter_value_id(index))
-                        .ghost()
-                        .small()
-                        .w(px(140.))
-                        .label(label)
-                        .dropdown_menu(move |menu, _, _| {
-                            options.iter().fold(menu, |menu, option| {
-                                let panel = panel.clone();
-                                let id = option.id;
-                                menu.item(
-                                    PopupMenuItem::new(option.name.clone())
-                                        .checked(id == chosen)
-                                        .on_click(move |_, window, cx| {
-                                            panel.update(cx, |this, cx| {
-                                                this.set_option(index, id, window, cx);
-                                            });
-                                        }),
-                                )
-                            })
+                    labeled(
+                        Button::new(filter_value_id(index))
+                            .ghost()
+                            .small()
+                            .w(px(140.)),
+                        label,
+                    )
+                    .dropdown_menu(move |menu, _, _| {
+                        options.iter().fold(menu, |menu, option| {
+                            let panel = panel.clone();
+                            let id = option.id;
+                            menu.item(
+                                PopupMenuItem::new(option.name.clone())
+                                    .checked(id == chosen)
+                                    .on_click(move |_, window, cx| {
+                                        panel.update(cx, |this, cx| {
+                                            this.set_option(index, id, window, cx);
+                                        });
+                                    }),
+                            )
                         })
-                        .on_open_change(self.tracker(cx))
-                        .into_any_element(),
+                    })
+                    .on_open_change(self.tracker(cx))
+                    .into_any_element(),
                 )
             }
             Operand::Date(date) => {
@@ -526,13 +532,13 @@ impl FilterPanel {
                         let open = *open;
                         open_panel.update(cx, |this, cx| this.toggle_date(index, open, window, cx));
                     })
-                    .trigger(
+                    .trigger(labeled(
                         Button::new(filter_value_id(index))
                             .ghost()
                             .small()
-                            .w(px(140.))
-                            .label(date_text(date)),
-                    );
+                            .w(px(140.)),
+                        date_text(date),
+                    ));
                 if let Some(calendar) = calendar {
                     popover = popover.content(move |_, _, _| Calendar::new(&calendar));
                 }
@@ -583,18 +589,14 @@ impl Render for FilterPanel {
             .test_support()
             .w(px(560.))
             .gap_2()
+            .text_size(UI_TEXT)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if this.menus_open == 0 && this.date.is_none() {
                     cx.emit(Dismiss);
                 }
             }))
             .when(empty, |this| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("No filters applied"),
-                )
+                this.child(div().text_color(muted).child("No filters applied"))
             })
             .children(rows)
             .child(

@@ -3,23 +3,23 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{
-    Disableable as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{Disableable as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, StatefulInteractiveElement as _, Styled, Subscription, TestSupportExt as _, Window,
-    div, px,
+    Pixels, Render, StatefulInteractiveElement as _, Styled, Subscription, TestSupportExt as _,
+    Window, div, px,
 };
 use remindr_core::application::{Changes, Command};
 use remindr_core::domain::{BlockKind, DatabaseId, Emoji, Parent, Workspace};
 
 use super::table::{Height, Scope, TableView};
 use crate::app::{WorkspaceModel, commands};
+use crate::theme::{
+    PAGE_ICON, PAGE_PADDING_TOP, PAGE_PADDING_X, PAGE_TITLE, PAGE_TITLE_WEIGHT, UI_TEXT,
+    UI_TEXT_SMALL, labeled,
+};
 
-const PAGE_PADDING: f32 = 48.;
-const TITLE_SIZE: f32 = 30.;
-const TITLE_HEIGHT: f32 = 48.;
+const TITLE_HEIGHT: Pixels = px(48.);
 
 #[must_use]
 pub fn shown_in(workspace: &Workspace, database: DatabaseId) -> usize {
@@ -186,18 +186,20 @@ impl DatabaseScreen {
         let content_screen = cx.entity();
         let input = self.icon_input.clone();
         let has_icon = current.is_some();
+        let muted = cx.theme().muted_foreground;
         let trigger = match &current {
             Some(emoji) => Button::new("database-icon")
                 .ghost()
-                .h(px(56.))
+                .h(PAGE_ICON + px(16.))
                 .px_2()
                 .accessibility_label(emoji.clone())
-                .child(div().text_size(px(36.)).child(emoji.clone())),
+                .child(div().text_size(PAGE_ICON).child(emoji.clone())),
             None => Button::new("database-icon")
                 .ghost()
                 .small()
+                .text_color(muted)
                 .accessibility_label("Add icon")
-                .label("Add icon"),
+                .child(div().text_size(UI_TEXT_SMALL).child("Add icon")),
         };
         Popover::new("database-icon-popover")
             .open(self.icon_open)
@@ -214,19 +216,20 @@ impl DatabaseScreen {
                 v_flex()
                     .w(px(260.))
                     .gap_2()
-                    .child(Input::new(&input).id("database-icon-input"))
+                    .text_size(UI_TEXT)
+                    .child(Input::new(&input).id("database-icon-input").small())
                     .child(
                         div().child(
-                            Button::new("database-icon-remove")
-                                .ghost()
-                                .small()
-                                .label("Remove")
-                                .disabled(!has_icon)
-                                .on_click(move |_, window, cx| {
-                                    remove_screen.update(cx, |this, cx| {
-                                        this.choose_icon(None, window, cx);
-                                    });
-                                }),
+                            labeled(
+                                Button::new("database-icon-remove").ghost().small(),
+                                "Remove",
+                            )
+                            .disabled(!has_icon)
+                            .on_click(move |_, window, cx| {
+                                remove_screen.update(cx, |this, cx| {
+                                    this.choose_icon(None, window, cx);
+                                });
+                            }),
                         ),
                     )
             })
@@ -252,21 +255,22 @@ impl Render for DatabaseScreen {
             .appearance(false)
             .bordered(false)
             .focus_bordered(false);
-        let title = Styled::h(title, px(TITLE_HEIGHT))
+        let title = Styled::h(title, TITLE_HEIGHT)
             .px_0()
-            .text_size(px(TITLE_SIZE))
-            .font_bold();
+            .text_size(PAGE_TITLE)
+            .font_weight(PAGE_TITLE_WEIGHT);
         v_flex()
             .id("database-screen")
             .test_support()
             .size_full()
             .bg(background)
+            .text_size(UI_TEXT)
             .child(
                 v_flex()
                     .w_full()
                     .flex_none()
-                    .px(px(PAGE_PADDING))
-                    .pt_8()
+                    .px(PAGE_PADDING_X)
+                    .pt(PAGE_PADDING_TOP)
                     .pb_3()
                     .gap_1()
                     .child(h_flex().child(picker))
@@ -276,7 +280,7 @@ impl Render for DatabaseScreen {
                             .id("database-shown-in")
                             .test_support()
                             .aria_label(shown.clone())
-                            .text_sm()
+                            .text_size(UI_TEXT_SMALL)
                             .text_color(muted)
                             .child(shown),
                     ),
@@ -285,7 +289,7 @@ impl Render for DatabaseScreen {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .px(px(PAGE_PADDING))
+                    .px(PAGE_PADDING_X)
                     .pb_4()
                     .child(self.table.clone()),
             )
@@ -362,6 +366,37 @@ mod tests {
         let new_row = ui.find(cx, "table-new-row").unwrap().bounds();
         assert!(new_row.origin.y >= last.bottom());
         assert!(new_row.bottom() <= px(700.));
+    }
+
+    #[gpui_kit::test]
+    fn the_new_row_button_sits_right_after_the_last_row(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_screen(cx, &model, &tasks);
+        let last = ui.find(cx, row_id(tasks.rows[3])).unwrap().bounds();
+        let new_row = ui.find(cx, "table-new-row").unwrap().bounds();
+        let gap = (new_row.top() - last.bottom()).abs();
+        assert!(gap <= px(1.), "gap {gap:?}");
+        assert!(new_row.bottom() < px(400.));
+    }
+
+    #[gpui_kit::test]
+    fn a_long_table_scrolls_and_keeps_the_new_row_in_the_window(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        for _ in 0..40 {
+            execute(
+                &model,
+                cx,
+                Command::AddRow {
+                    database: tasks.database,
+                    values: Vec::new(),
+                },
+            );
+        }
+        let ui = open_screen(cx, &model, &tasks);
+        let new_row = ui.find(cx, "table-new-row").unwrap().bounds();
+        assert!(new_row.bottom() <= px(700.), "{new_row:?}");
+        assert!(ui.find(cx, row_id(tasks.rows[0])).is_some());
+        assert!(ui.find(cx, row_id(tasks.rows[3])).is_some());
     }
 
     #[gpui_kit::test]

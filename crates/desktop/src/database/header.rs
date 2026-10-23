@@ -5,10 +5,10 @@ use gpui_kit::{
     AnyElement, App, Context, DismissEvent, ElementId, Entity, Focusable as _,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, RenderOnce,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
-    Window, prelude::FluentBuilder as _, px,
+    Window, prelude::FluentBuilder as _,
 };
 
-const HEADER_HEIGHT: f32 = 32.;
+use crate::theme::{TABLE_HEADER, UI_TEXT};
 
 #[derive(Default)]
 pub struct MenuState {
@@ -95,9 +95,10 @@ impl RenderOnce for Trigger {
             .aria_label(self.label)
             .aria_expanded(self.open)
             .w_full()
-            .h(px(HEADER_HEIGHT))
+            .h(TABLE_HEADER)
             .px_2()
             .gap_1p5()
+            .text_size(UI_TEXT)
             .items_center()
             .overflow_hidden()
             .cursor_pointer()

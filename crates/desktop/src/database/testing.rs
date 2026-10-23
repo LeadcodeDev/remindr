@@ -1,7 +1,7 @@
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     App, AppContext as _, Bounds, ElementId, Entity, Point, Render, TestAppContext, Window,
-    WindowBounds, WindowOptions, px, size,
+    WindowBounds, WindowOptions, div, px, size,
 };
 use remindr_core::application::{Changes, Command, Created, Session};
 use remindr_core::domain::{
@@ -237,6 +237,7 @@ pub fn open<V: Render + 'static>(
     let navigator = cx.new(|_| Navigator::new());
     cx.update(|cx| {
         gpui_kit::init(cx);
+        crate::theme::apply(cx);
         cx.set_global(NavigatorHandle(navigator));
     });
     let options = WindowOptions {
@@ -265,6 +266,39 @@ pub fn open_block(
     let shared = model.clone();
     let (ui, _) = open(cx, model, move |window, cx| {
         cx.new(|cx| DatabaseViewBlock::new(shared, block, database, window, cx))
+    });
+    ui
+}
+
+pub struct Narrow {
+    inner: gpui_kit::AnyView,
+    width: gpui_kit::Pixels,
+}
+
+impl Render for Narrow {
+    fn render(
+        &mut self,
+        _: &mut Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        div().w(self.width).child(self.inner.clone())
+    }
+}
+
+pub fn open_block_in_width(
+    cx: &mut TestAppContext,
+    model: &Entity<WorkspaceModel>,
+    block: BlockId,
+    database: DatabaseId,
+    width: gpui_kit::Pixels,
+) -> Ui {
+    let shared = model.clone();
+    let (ui, _) = open(cx, model, move |window, cx| {
+        let inner: gpui_kit::AnyView = cx
+            .new(|cx| DatabaseViewBlock::new(shared, block, database, window, cx))
+            .into();
+        cx.new(|_| Narrow { inner, width })
     });
     ui
 }

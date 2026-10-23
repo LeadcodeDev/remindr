@@ -20,8 +20,7 @@ use super::entries::{
 };
 use super::rename::{self, RenameTarget};
 use crate::app::Route;
-
-const INDENT: f32 = 16.;
+use crate::theme::{SIDEBAR_ICON, SIDEBAR_INDENT, SIDEBAR_ROW, UI_TEXT, UI_TEXT_SMALL};
 
 #[derive(Clone)]
 pub struct Section {
@@ -74,9 +73,10 @@ impl SidebarItem for Section {
             .w_full()
             .child(
                 h_flex()
-                    .h_8()
+                    .h(SIDEBAR_ROW)
                     .px_2()
-                    .text_xs()
+                    .items_center()
+                    .text_size(UI_TEXT_SMALL)
                     .text_color(heading)
                     .child(self.label),
             )
@@ -104,7 +104,7 @@ fn render_entry(entry: &Entry, depth: usize, handles: &Handles, cx: &App) -> Any
         Target::Page(page) if !entry.children.is_empty() => {
             toggle_button(page, entry.expanded, handles).into_any_element()
         }
-        _ => div().w_5().flex_none().into_any_element(),
+        _ => div().w(SIDEBAR_ICON).flex_none().into_any_element(),
     };
 
     let icon = match (&entry.emoji, entry.target) {
@@ -112,19 +112,19 @@ fn render_entry(entry: &Entry, depth: usize, handles: &Handles, cx: &App) -> Any
             .id(page_icon_id(page))
             .aria_label(emoji.clone())
             .test_support()
-            .w_5()
+            .w(SIDEBAR_ICON)
             .flex_none()
             .text_center()
             .child(emoji.clone())
             .into_any_element(),
         (Some(emoji), Target::Database(_)) => div()
-            .w_5()
+            .w(SIDEBAR_ICON)
             .flex_none()
             .text_center()
             .child(emoji.clone())
             .into_any_element(),
         (None, _) => div()
-            .w_5()
+            .w(SIDEBAR_ICON)
             .flex_none()
             .flex()
             .justify_center()
@@ -133,7 +133,7 @@ fn render_entry(entry: &Entry, depth: usize, handles: &Handles, cx: &App) -> Any
                     Target::Page(_) => IconName::FileText,
                     Target::Database(_) => IconName::LayoutDashboard,
                 })
-                .size_4()
+                .size(SIDEBAR_ICON)
                 .text_color(muted),
             )
             .into_any_element(),
@@ -171,11 +171,12 @@ fn render_entry(entry: &Entry, depth: usize, handles: &Handles, cx: &App) -> Any
         .test_support()
         .group(group.clone())
         .w_full()
-        .h_7()
+        .h(SIDEBAR_ROW)
         .items_center()
         .gap_0p5()
         .rounded(radius)
-        .pl(px(depth as f32 * INDENT + 2.))
+        .text_size(UI_TEXT)
+        .pl(SIDEBAR_INDENT * depth as f32 + px(2.))
         .when(entry.active, |this| {
             this.bg(accent).font_medium().text_color(foreground)
         })
@@ -204,6 +205,7 @@ fn toggle_button(page: BlockId, expanded: bool, handles: &Handles) -> Button {
     Button::new(page_toggle_id(page))
         .ghost()
         .xsmall()
+        .size(SIDEBAR_ICON)
         .icon(if expanded {
             IconName::ChevronDown
         } else {

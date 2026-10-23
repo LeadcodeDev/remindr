@@ -1,7 +1,9 @@
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ColorName, Sizable as _};
-use gpui_kit::{ParentElement as _, SharedString};
+use gpui_kit::{ParentElement as _, SharedString, Styled as _};
 use remindr_core::domain::{OptionColor, SelectOption};
+
+use crate::theme::UI_TEXT_SMALL;
 
 #[must_use]
 pub fn tag_color(color: OptionColor) -> ColorName {
@@ -22,6 +24,7 @@ pub fn tag_color(color: OptionColor) -> ColorName {
 pub fn option_tag(option: &SelectOption) -> Tag {
     Tag::color(tag_color(option.color))
         .small()
+        .text_size(UI_TEXT_SMALL)
         .child(SharedString::from(option.name.clone()))
 }
 

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 
-use gpui_kit::base::text::editor_host::{BlockNode, RenderContext};
+use gpui_kit::base::text::editor_host::BlockNode;
 use gpui_kit::{
     AnyView, App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement,
     Pixels, Point, Render, ScrollHandle, SharedString, Subscription, TestSupportExt, Window, div,
@@ -14,6 +14,7 @@ use remindr_core::domain::{Block, BlockId, BlockKind, HeadingLevel, Parent};
 
 use crate::app::{NavigatorHandle, Route, WorkspaceModel};
 use crate::embed::EmbedRegistry;
+use crate::theme::BODY_TEXT;
 
 mod actions;
 #[cfg(test)]
@@ -586,8 +587,7 @@ impl Focusable for BlockEditor {
 impl Render for BlockEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Palette::of(cx);
-        let context = RenderContext::from_app(cx)
-            .with_body_font_size(px(16.))
+        let context = render::render_context(cx)
             .on_link_click(|_, _, _, _| {})
             .with_code_block_highlighter(|_| Vec::new());
         self.fallback_height.set(window.viewport_size().height);
@@ -642,7 +642,7 @@ impl Render for BlockEditor {
             .size_full()
             .cursor_text()
             .overflow_y_scroll()
-            .text_size(px(16.))
+            .text_size(BODY_TEXT)
             .text_color(palette.foreground)
             .child(EditorRoot {
                 editor: editor.clone(),

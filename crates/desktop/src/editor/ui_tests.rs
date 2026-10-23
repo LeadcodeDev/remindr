@@ -15,6 +15,7 @@ use super::render::{checkbox_id, chevron_id, row_id};
 use super::testing::{Doc, Fixture};
 use crate::app::{Navigator, NavigatorHandle, Route};
 use crate::embed::EmbedRegistry;
+use crate::theme::{BLOCK_GAP, BODY_TEXT, H1, H2};
 
 fn at(block: remindr_core::domain::BlockId, offset: usize) -> TextPoint {
     TextPoint { block, offset }
@@ -36,6 +37,30 @@ fn renders_one_row_per_visible_block(cx: &mut TestAppContext) {
             .collect();
         assert!(tops.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(window.try_find(row_id(hidden)).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn rows_follow_the_compact_typography(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let one = doc.child(BlockKind::Heading(HeadingLevel::One), "One");
+    let two = doc.child(BlockKind::Heading(HeadingLevel::Two), "Two");
+    let three = doc.child(BlockKind::Heading(HeadingLevel::Three), "Three");
+    let first = doc.child(BlockKind::Text, "plain");
+    let second = doc.child(BlockKind::Text, "again");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.with(cx, |window, _| {
+        let bounds = |block| window.find(row_id(block)).bounds();
+        let height = |block| f32::from(bounds(block).size.height);
+        let gap = f32::from(BLOCK_GAP);
+        assert!((height(one) - (f32::from(H1) * 1.25 + gap)).abs() < 0.6);
+        assert!((height(two) - (f32::from(H2) * 1.35 + gap)).abs() < 0.6);
+        assert!(height(two) > height(three));
+        assert!(height(three) >= height(first) - 1.);
+        let line = (f32::from(BODY_TEXT) * 1.618).round();
+        assert!((height(first) - (line + gap)).abs() < 1.);
+        let step = f32::from(bounds(second).top() - bounds(first).top());
+        assert!((step - (line + gap)).abs() < 1., "step {step}");
     });
 }
 

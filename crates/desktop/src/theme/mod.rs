@@ -1,5 +1,10 @@
+mod metrics;
+
 use gpui_kit::component::Theme;
-use gpui_kit::{App, Hsla, Window, rgb};
+use gpui_kit::component::button::Button;
+use gpui_kit::{App, Hsla, ParentElement as _, SharedString, Styled as _, Window, div, rgb};
+
+pub use metrics::*;
 
 pub struct Palette {
     pub background: u32,
@@ -59,7 +64,18 @@ pub fn apply(cx: &mut App) {
         colors.accent = color(palette.accent);
         colors.title_bar = color(palette.background);
         colors.title_bar_border = color(palette.border);
+        theme.font_size = UI_TEXT;
+        theme.mono_font_size = CODE_TEXT;
+        theme.radius = RADIUS;
+        theme.radius_lg = RADIUS_LG;
     });
+}
+
+pub fn labeled(button: Button, text: impl Into<SharedString>) -> Button {
+    let text = text.into();
+    button
+        .accessibility_label(text.clone())
+        .child(div().text_size(UI_TEXT).child(text))
 }
 
 pub fn sync(window: &mut Window, cx: &mut App) {
@@ -77,7 +93,7 @@ mod tests {
     use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
     use gpui_kit::{Hsla, TestAppContext, rgb};
 
-    use super::{DARK, LIGHT, apply, palette};
+    use super::{CODE_TEXT, DARK, LIGHT, RADIUS, RADIUS_LG, UI_TEXT, apply, palette};
 
     fn hsla(hex: u32) -> Hsla {
         rgb(hex).into()
@@ -125,6 +141,27 @@ mod tests {
             assert_eq!(colors.sidebar, hsla(DARK.sidebar));
             assert_eq!(colors.muted_foreground, hsla(DARK.muted_foreground));
             assert_eq!(colors.sidebar_accent, hsla(DARK.sidebar_accent));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn compact_metrics_are_applied_to_the_theme(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            Theme::change(ThemeMode::Light, None, cx);
+            apply(cx);
+            let theme = cx.theme();
+            assert_eq!(theme.font_size, UI_TEXT);
+            assert_eq!(theme.font_size, gpui_kit::px(13.));
+            assert_eq!(theme.mono_font_size, CODE_TEXT);
+            assert_eq!(theme.radius, RADIUS);
+            assert_eq!(theme.radius, gpui_kit::px(4.));
+            assert_eq!(theme.radius_lg, RADIUS_LG);
+            Theme::change(ThemeMode::Dark, None, cx);
+            apply(cx);
+            let theme = cx.theme();
+            assert_eq!(theme.font_size, UI_TEXT);
+            assert_eq!(theme.radius, RADIUS);
         });
     }
 }

@@ -19,6 +19,7 @@ use super::table::{Height, Scope, TableView};
 use super::toolbar::Toolbar;
 use crate::app::navigation::database_name;
 use crate::app::{NavigatorHandle, Route, WorkspaceModel, commands};
+use crate::theme::{RADIUS_LG, UI_TEXT, UI_TEXT_SMALL};
 
 pub struct DatabaseViewBlock {
     model: Entity<WorkspaceModel>,
@@ -288,6 +289,7 @@ impl DatabaseViewBlock {
             .gap_2()
             .items_center()
             .cursor_pointer()
+            .text_size(UI_TEXT)
             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
             .on_click(cx.listener(|this, _, _, cx| this.open_screen(cx)))
             .child(glyph)
@@ -310,7 +312,8 @@ impl DatabaseViewBlock {
                 .child(
                     Input::new(&renaming.input)
                         .id(super::ids::tab_rename_id(view))
-                        .small(),
+                        .small()
+                        .text_size(UI_TEXT),
                 )
                 .into_any_element();
         }
@@ -318,6 +321,7 @@ impl DatabaseViewBlock {
         div()
             .id(tab_label_id(view))
             .test_support()
+            .text_size(UI_TEXT)
             .child(name.to_owned())
             .context_menu(move |menu, _, _| {
                 let renamer = block.clone();
@@ -373,7 +377,7 @@ impl DatabaseViewBlock {
                             div()
                                 .id("view-add-hint")
                                 .test_support()
-                                .text_xs()
+                                .text_size(UI_TEXT_SMALL)
                                 .child("Add a Select property first")
                         })
                         .disabled(true),
@@ -405,6 +409,7 @@ impl DatabaseViewBlock {
             .collect();
         TabBar::new("view-tabs")
             .underline()
+            .small()
             .selected_index(selected)
             .children(tabs)
             .suffix(self.add_menu(cx))
@@ -422,7 +427,8 @@ impl Render for DatabaseViewBlock {
             .test_support()
             .w_full()
             .gap_1()
-            .py_2();
+            .py_2()
+            .text_size(UI_TEXT);
         if !self.alive(cx) {
             return root.child(
                 div()
@@ -431,7 +437,7 @@ impl Render for DatabaseViewBlock {
                     .aria_label("This database was deleted")
                     .py_6()
                     .px_3()
-                    .rounded(px(6.))
+                    .rounded(RADIUS_LG)
                     .bg(cx.theme().muted)
                     .text_color(cx.theme().muted_foreground)
                     .child("This database was deleted"),

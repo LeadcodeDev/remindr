@@ -12,6 +12,7 @@ use super::palette::Palette;
 use super::rows::{Expansion, extent, rows};
 use super::slash::single_line;
 use super::{BlockEditor, is_atomic_row};
+use crate::theme::UI_TEXT_SMALL;
 
 pub struct LinkEntry {
     pub start: TextPoint,
@@ -201,7 +202,7 @@ pub fn link_box(entry: &LinkEntry, palette: &Palette) -> AnyElement {
             .px(px(8.))
             .flex()
             .items_center()
-            .text_size(px(12.))
+            .text_size(UI_TEXT_SMALL)
             .text_color(palette.danger)
             .child(INVALID)
     });

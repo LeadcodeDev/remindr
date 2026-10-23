@@ -3,11 +3,11 @@ mod icon;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{StyledExt as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Styled, Subscription, TestSupportExt as _, Window, div, prelude::FluentBuilder as _,
-    px,
+    Pixels, Render, Styled, Subscription, TestSupportExt as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use remindr_core::application::{Changes, Command, TextPoint};
 use remindr_core::domain::{BlockId, BlockKind, Emoji, Parent, RichText};
@@ -16,15 +16,15 @@ use crate::app::WorkspaceModel;
 use crate::app::commands;
 use crate::database::RowProperties;
 use crate::editor::BlockEditor;
+use crate::theme::{
+    CONTENT_MAX_WIDTH, PAGE_PADDING_TOP, PAGE_PADDING_X, PAGE_TITLE, PAGE_TITLE_WEIGHT,
+};
 
 #[cfg(test)]
 pub use icon::{ICON_SUGGESTIONS, icon_option_id};
 
-const CONTENT_WIDTH: f32 = 860.;
-const PAGE_PADDING: f32 = 48.;
-const EDITOR_GUTTER: f32 = 24.;
-const TITLE_SIZE: f32 = 36.;
-const TITLE_HEIGHT: f32 = 56.;
+const EDITOR_GUTTER: Pixels = px(24.);
+const TITLE_HEIGHT: Pixels = px(48.);
 
 pub struct PageView {
     model: Entity<WorkspaceModel>,
@@ -207,10 +207,10 @@ impl Render for PageView {
             .appearance(false)
             .bordered(false)
             .focus_bordered(false);
-        let title = Styled::h(title, px(TITLE_HEIGHT))
+        let title = Styled::h(title, TITLE_HEIGHT)
             .px_0()
-            .text_size(px(TITLE_SIZE))
-            .font_bold();
+            .text_size(PAGE_TITLE)
+            .font_weight(PAGE_TITLE_WEIGHT);
         v_flex()
             .id("page-view")
             .test_support()
@@ -219,11 +219,11 @@ impl Render for PageView {
             .child(
                 v_flex()
                     .w_full()
-                    .max_w(px(CONTENT_WIDTH))
+                    .max_w(CONTENT_MAX_WIDTH)
                     .mx_auto()
-                    .pl(px(PAGE_PADDING + EDITOR_GUTTER))
-                    .pr(px(PAGE_PADDING))
-                    .pt_10()
+                    .pl(PAGE_PADDING_X + EDITOR_GUTTER)
+                    .pr(PAGE_PADDING_X)
+                    .pt(PAGE_PADDING_TOP)
                     .gap_1()
                     .flex_none()
                     .child(
@@ -242,8 +242,8 @@ impl Render for PageView {
                 h_flex().flex_1().min_h_0().justify_center().child(
                     div()
                         .size_full()
-                        .max_w(px(CONTENT_WIDTH))
-                        .px(px(PAGE_PADDING))
+                        .max_w(CONTENT_MAX_WIDTH)
+                        .px(PAGE_PADDING_X)
                         .child(self.editor.clone()),
                 ),
             )

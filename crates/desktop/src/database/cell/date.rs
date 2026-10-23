@@ -10,6 +10,7 @@ use remindr_core::domain::{BlockId, PropertyId, PropertyValue};
 use super::{Done, write_value};
 use crate::app::WorkspaceModel;
 use crate::database::format::{from_naive, to_naive};
+use crate::theme::{UI_TEXT, labeled};
 
 pub struct DatePanel {
     model: Entity<WorkspaceModel>,
@@ -80,12 +81,13 @@ impl DatePanel {
 
 impl Render for DatePanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().gap_2().child(Calendar::new(&self.calendar)).child(
-            Button::new("date-clear")
-                .ghost()
-                .small()
-                .label("Clear")
-                .on_click(cx.listener(|this, _, window, cx| this.clear(window, cx))),
-        )
+        v_flex()
+            .gap_2()
+            .text_size(UI_TEXT)
+            .child(Calendar::new(&self.calendar))
+            .child(
+                labeled(Button::new("date-clear").ghost().small(), "Clear")
+                    .on_click(cx.listener(|this, _, window, cx| this.clear(window, cx))),
+            )
     }
 }

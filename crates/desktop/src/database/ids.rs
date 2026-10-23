@@ -20,6 +20,11 @@ pub fn cell_id(row: BlockId, property: PropertyId) -> ElementId {
 }
 
 #[must_use]
+pub fn cell_text_id(row: BlockId, property: PropertyId) -> ElementId {
+    paired("cell-text", row.as_uuid(), property.as_uuid())
+}
+
+#[must_use]
 pub fn open_row_id(row: BlockId) -> ElementId {
     named("open-row", row.as_uuid())
 }

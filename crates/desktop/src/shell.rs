@@ -3,7 +3,7 @@ use gpui_kit::component::{ActiveTheme as _, TitleBar, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _,
-    Subscription, TestSupportExt as _, Window, div, px,
+    Subscription, TestSupportExt as _, Window, div,
 };
 use remindr_core::application::Changes;
 use remindr_core::domain::{BlockId, DatabaseId};
@@ -15,7 +15,7 @@ use crate::database::DatabaseScreen;
 use crate::keymap::{Back, NewPage, Redo, Undo};
 use crate::page::PageView;
 use crate::sidebar::SidebarView;
-use crate::theme;
+use crate::theme::{self, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH, UI_TEXT};
 
 pub struct Shell {
     model: Entity<WorkspaceModel>,
@@ -182,6 +182,7 @@ impl Render for Shell {
             .size_full()
             .bg(background)
             .text_color(foreground)
+            .text_size(UI_TEXT)
             .child(
                 TitleBar::new().child(
                     div()
@@ -190,7 +191,7 @@ impl Render for Shell {
                         .test_support()
                         .min_w_0()
                         .truncate()
-                        .text_sm()
+                        .text_size(UI_TEXT)
                         .text_color(muted)
                         .child(breadcrumb),
                 ),
@@ -200,8 +201,8 @@ impl Render for Shell {
                     h_resizable("shell-panels")
                         .child(
                             resizable_panel()
-                                .size(px(260.))
-                                .size_range(px(200.)..px(480.))
+                                .size(SIDEBAR_WIDTH)
+                                .size_range(SIDEBAR_MIN_WIDTH..SIDEBAR_MAX_WIDTH)
                                 .fixed()
                                 .child(
                                     div()
@@ -243,7 +244,7 @@ mod tests {
         ui.with(cx, |window, _| {
             let sidebar = window.find("sidebar");
             let main_area = window.find("main-area");
-            assert_eq!(sidebar.bounds().size.width, px(260.));
+            assert_eq!(sidebar.bounds().size.width, px(240.));
             assert!(main_area.bounds().size.width > px(0.));
             assert!(main_area.bounds().left() >= sidebar.bounds().right());
         });

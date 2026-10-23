@@ -101,6 +101,7 @@ mod fixture {
     impl Fixture {
         pub fn open(cx: &mut TestAppContext, doc: &Doc) -> Self {
             cx.update(gpui_kit::init);
+            cx.update(crate::theme::apply);
             cx.update(editor::init);
             let store = MemoryStore::with_snapshot(doc.snapshot());
             let probe = store.shared();

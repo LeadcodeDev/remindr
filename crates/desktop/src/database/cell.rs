@@ -10,7 +10,7 @@ use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, ElementId, Entity,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, RenderOnce, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _,
 };
 use remindr_core::application::{Changes, Command};
 use remindr_core::domain::{
@@ -21,11 +21,10 @@ use remindr_core::domain::{
 use self::date::DatePanel;
 use self::options::OptionsPicker;
 use super::format::{Parsed, date_text, format_number, parse_number, plain_number};
-use super::ids::{cell_id, open_row_id};
+use super::ids::{cell_id, cell_text_id, open_row_id};
 use super::tags::option_tag;
 use crate::app::{NavigatorHandle, Route, WorkspaceModel, commands};
-
-const CELL_HEIGHT: f32 = 32.;
+use crate::theme::{TABLE_ROW, UI_TEXT, UI_TEXT_SMALL};
 
 pub struct Done;
 
@@ -361,6 +360,7 @@ impl Cell {
         let invalid = self.invalid;
         let danger = cx.theme().danger;
         let muted = cx.theme().muted_foreground;
+        let background = cx.theme().background;
         let link = cx.theme().link;
         let group = SharedString::from(format!("cell-{}", self.row.as_uuid()));
         let body = match editing {
@@ -372,11 +372,17 @@ impl Cell {
                         .appearance(false)
                         .bordered(false)
                         .focus_bordered(false)
-                        .small(),
+                        .small()
+                        .text_size(UI_TEXT),
                 )
                 .into_any_element(),
             None => {
-                let shown = div().flex_1().min_w_0().truncate();
+                let shown = div()
+                    .id(cell_text_id(self.row, self.property))
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate();
                 match text {
                     Text::Title if display.is_empty() => {
                         shown.text_color(muted).child("Untitled").into_any_element()
@@ -396,12 +402,13 @@ impl Cell {
             .aria_label(label)
             .when(invalid, |this| this.aria_value("invalid"))
             .group(group.clone())
+            .relative()
             .size_full()
             .px_2()
-            .gap_2()
             .items_center()
             .overflow_hidden()
             .cursor_text()
+            .text_size(UI_TEXT)
             .when(invalid, |this| this.border_1().border_color(danger))
             .on_action(cx.listener(|this, _: &Escape, _, cx| this.cancel_edit(cx)))
             .on_click(cx.listener(move |this, event, window, cx| {
@@ -410,13 +417,23 @@ impl Cell {
             .child(body)
             .when(text == Text::Title, |this| {
                 this.child(
-                    Button::new(open_row_id(self.row))
-                        .ghost()
-                        .xsmall()
-                        .label("Open")
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right_1()
+                        .flex()
+                        .items_center()
+                        .bg(background)
                         .opacity(0.)
                         .group_hover(group, |style| style.opacity(1.))
-                        .on_click(cx.listener(|this, _, _, cx| this.open_page(cx))),
+                        .child(
+                            Button::new(open_row_id(self.row))
+                                .ghost()
+                                .xsmall()
+                                .child(div().text_size(UI_TEXT_SMALL).child("Open"))
+                                .on_click(cx.listener(|this, _, _, cx| this.open_page(cx))),
+                        ),
                 )
             })
             .into_any_element()
@@ -460,6 +477,7 @@ impl Cell {
         }
         div()
             .size_full()
+            .text_size(UI_TEXT)
             .child(popover.w_full().h_full())
             .into_any_element()
     }
@@ -500,6 +518,7 @@ impl Cell {
             .size_full()
             .px_2()
             .items_center()
+            .text_size(UI_TEXT)
             .child(Checkbox::new(id).checked(checked).on_click(cx.listener(
                 |this, checked: &bool, window, cx| {
                     write_value(
@@ -567,7 +586,8 @@ impl RenderOnce for Trigger {
             .aria_label(self.label)
             .aria_expanded(self.open)
             .w_full()
-            .h(px(CELL_HEIGHT))
+            .h(TABLE_ROW)
+            .text_size(UI_TEXT)
             .px_2()
             .gap_1()
             .items_center()

@@ -15,9 +15,9 @@ use super::ids::property_line_id;
 use super::kinds::kind_icon;
 use super::ui::icon_label;
 use crate::app::{WorkspaceModel, commands};
+use crate::theme::{TABLE_ROW, UI_TEXT};
 
-const NAME_WIDTH: f32 = 160.;
-const LINE_HEIGHT: f32 = 32.;
+const NAME_WIDTH: f32 = 140.;
 
 pub struct RowProperties {
     model: Entity<WorkspaceModel>,
@@ -102,6 +102,7 @@ impl Render for RowProperties {
                     .test_support()
                     .aria_label(property.name.clone())
                     .items_center()
+                    .text_size(UI_TEXT)
                     .child(
                         h_flex()
                             .w(px(NAME_WIDTH))
@@ -113,7 +114,7 @@ impl Render for RowProperties {
                             .child(Icon::new(kind_icon(&property.kind)).size_3p5())
                             .child(div().truncate().child(property.name.clone())),
                     )
-                    .child(div().flex_1().min_w_0().h(px(LINE_HEIGHT)).child(cell))
+                    .child(div().flex_1().min_w_0().h(TABLE_ROW).child(cell))
             })
             .collect();
         v_flex()
@@ -121,6 +122,7 @@ impl Render for RowProperties {
             .test_support()
             .w_full()
             .py_2()
+            .text_size(UI_TEXT)
             .children(lines)
             .child(
                 div().child(

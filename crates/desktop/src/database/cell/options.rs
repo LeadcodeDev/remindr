@@ -16,6 +16,7 @@ use crate::app::{WorkspaceModel, commands};
 use crate::database::format::next_option_color;
 use crate::database::ids::option_id;
 use crate::database::tags::option_tag;
+use crate::theme::{RADIUS, UI_TEXT, labeled};
 
 pub struct OptionsPicker {
     model: Entity<WorkspaceModel>,
@@ -206,7 +207,7 @@ impl Render for OptionsPicker {
                     .gap_2()
                     .items_center()
                     .justify_between()
-                    .rounded(px(4.))
+                    .rounded(RADIUS)
                     .cursor_pointer()
                     .hover(|style| style.bg(cx.theme().accent))
                     .on_click(cx.listener(move |this, _, window, cx| this.pick(id, window, cx)))
@@ -226,7 +227,7 @@ impl Render for OptionsPicker {
                 .py_1()
                 .gap_2()
                 .items_center()
-                .rounded(px(4.))
+                .rounded(RADIUS)
                 .cursor_pointer()
                 .hover(|style| style.bg(cx.theme().accent))
                 .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx)))
@@ -238,7 +239,13 @@ impl Render for OptionsPicker {
             .test_support()
             .w(px(240.))
             .gap_2()
-            .child(Input::new(&self.search).id("option-search").small())
+            .text_size(UI_TEXT)
+            .child(
+                Input::new(&self.search)
+                    .id("option-search")
+                    .small()
+                    .text_size(UI_TEXT),
+            )
             .child(
                 v_flex()
                     .id("option-list")
@@ -249,10 +256,7 @@ impl Render for OptionsPicker {
                     .children(create),
             )
             .child(
-                Button::new("option-clear")
-                    .ghost()
-                    .small()
-                    .label("Clear")
+                labeled(Button::new("option-clear").ghost().small(), "Clear")
                     .on_click(cx.listener(|this, _, window, cx| this.clear(window, cx))),
             )
     }

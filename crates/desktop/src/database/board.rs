@@ -18,8 +18,8 @@ use super::tags::option_tag;
 use super::ui::icon_label;
 use crate::app::navigation::page_title;
 use crate::app::{NavigatorHandle, Route, WorkspaceModel, commands};
+use crate::theme::{BOARD_CARD_PADDING, BOARD_COLUMN_WIDTH, RADIUS_LG, UI_TEXT, UI_TEXT_SMALL};
 
-const COLUMN_WIDTH: f32 = 272.;
 const COLUMN_MAX_HEIGHT: f32 = 520.;
 
 #[derive(Clone)]
@@ -36,10 +36,10 @@ struct DragPreview {
 impl Render for DragPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .w(px(COLUMN_WIDTH - 32.))
-            .px_3()
-            .py_2()
-            .rounded(px(6.))
+            .w(BOARD_COLUMN_WIDTH - px(32.))
+            .p(BOARD_CARD_PADDING)
+            .text_size(UI_TEXT)
+            .rounded(RADIUS_LG)
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -234,7 +234,7 @@ impl BoardView {
                         .id(card_prop_id(row, property.id))
                         .test_support()
                         .aria_label(label)
-                        .text_xs()
+                        .text_size(UI_TEXT_SMALL)
                         .child(element)
                         .into_any_element(),
                 )
@@ -254,9 +254,9 @@ impl BoardView {
             .aria_label(title.clone())
             .w_full()
             .gap_1()
-            .px_3()
-            .py_2()
-            .rounded(px(6.))
+            .p(BOARD_CARD_PADDING)
+            .text_size(UI_TEXT)
+            .rounded(RADIUS_LG)
             .border_1()
             .border_color(border)
             .bg(background)
@@ -303,7 +303,6 @@ impl BoardView {
         let heading: AnyElement = match option {
             Some(option) => option_tag(option).into_any_element(),
             None => div()
-                .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(name.clone())
                 .into_any_element(),
@@ -330,11 +329,12 @@ impl BoardView {
             .test_support()
             .aria_label(name)
             .aria_value(group.rows.len().to_string())
-            .w(px(COLUMN_WIDTH))
+            .w(BOARD_COLUMN_WIDTH)
             .flex_none()
             .gap_2()
-            .p_2()
-            .rounded(px(8.))
+            .p(BOARD_CARD_PADDING)
+            .text_size(UI_TEXT)
+            .rounded(RADIUS_LG)
             .bg(stripe.opacity(0.5))
             .drag_over::<CardDrag>(move |style, dragged, _, _| {
                 if sorted && dragged.group == target {
@@ -349,7 +349,7 @@ impl BoardView {
             .child(
                 h_flex().gap_2().items_center().child(heading).child(
                     div()
-                        .text_xs()
+                        .text_size(UI_TEXT_SMALL)
                         .text_color(cx.theme().muted_foreground)
                         .child(group.rows.len().to_string()),
                 ),

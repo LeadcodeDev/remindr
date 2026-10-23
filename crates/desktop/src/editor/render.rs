@@ -4,8 +4,8 @@ use std::rc::Rc;
 use gpui_kit::base::text::editor_host::{BlockNode, FlowPosition, RenderContext};
 use gpui_kit::component::{Icon, IconName};
 use gpui_kit::{
-    AnyElement, AnyView, App, Bounds, Entity, MouseButton, Pixels, SharedString, TestSupportExt,
-    Window, canvas, div, prelude::*, px,
+    AnyElement, AnyView, App, Bounds, Entity, MouseButton, Pixels, SharedString, StyleRefinement,
+    TestSupportExt, Window, canvas, div, prelude::*, px,
 };
 use remindr_core::domain::{BlockId, BlockKind, DatabaseId};
 
@@ -14,12 +14,35 @@ use super::frame::leaf_key;
 use super::palette::Palette;
 use super::rows::Row;
 use super::{BlockEditor, open_page};
+use crate::theme::{
+    BLOCK_GAP, BODY_TEXT, CODE_TEXT, H1, H2, H3, RADIUS, RADIUS_LG, UI_TEXT, UI_TEXT_SMALL,
+};
 
 pub const GUTTER: Pixels = px(24.);
 pub const INDENT: Pixels = px(24.);
-pub const LINE: Pixels = px(26.);
+pub const LINE: Pixels = px(24.);
 const HANDLE_WIDTH: Pixels = px(18.);
 const HANDLE_HEIGHT: Pixels = px(22.);
+
+fn heading_style(level: u8) -> StyleRefinement {
+    let size = match level {
+        1 => H1,
+        2 => H2,
+        3 => H3,
+        _ => return StyleRefinement::default(),
+    };
+    StyleRefinement::default().text_size(size)
+}
+
+pub fn render_context(cx: &App) -> RenderContext {
+    let context = RenderContext::from_app(cx).with_body_font_size(BODY_TEXT);
+    let style = context
+        .style()
+        .clone()
+        .with_heading(heading_style)
+        .with_code_block(StyleRefinement::default().text_size(CODE_TEXT));
+    context.with_style(style)
+}
 
 pub type RowBounds = Rc<RefCell<Vec<(BlockId, Bounds<Pixels>)>>>;
 
@@ -120,7 +143,10 @@ pub fn row(
         .flex_1()
         .min_w_0()
         .when(boxed, |this| {
-            this.bg(palette.muted).rounded(px(6.)).px(px(8.)).py(px(4.))
+            this.bg(palette.muted)
+                .rounded(RADIUS_LG)
+                .px(px(8.))
+                .py(px(4.))
         })
         .children(prefix)
         .child(content);
@@ -133,8 +159,8 @@ pub fn row(
         .flex()
         .flex_row()
         .items_start()
-        .py(px(2.))
-        .rounded(px(4.))
+        .py(BLOCK_GAP / 2.)
+        .rounded(RADIUS)
         .when(spec.selected, |this| this.bg(palette.selection))
         .child(gutter(block, spec.label.clone(), env))
         .child(div().w(INDENT * spec.row.depth as f32).flex_none())
@@ -169,9 +195,9 @@ fn gutter(block: BlockId, label: SharedString, env: &RowEnv) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(RADIUS)
         .cursor_grab()
-        .text_size(px(12.))
+        .text_size(UI_TEXT_SMALL)
         .text_color(palette.muted_foreground)
         .hover(|style| style.bg(palette.muted))
         .child("\u{22EE}\u{22EE}");
@@ -337,13 +363,14 @@ fn content(
             Some(view) => div()
                 .flex_1()
                 .min_w_0()
+                .text_size(UI_TEXT)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(view)
                 .into_any_element(),
             None => div()
                 .flex_1()
                 .h(px(120.))
-                .rounded(px(6.))
+                .rounded(RADIUS_LG)
                 .bg(palette.muted)
                 .into_any_element(),
         },

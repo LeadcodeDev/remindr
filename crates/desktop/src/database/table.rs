@@ -7,7 +7,7 @@ use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, T
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
+    ParentElement as _, Pixels, Render, SharedString, Stateful, StatefulInteractiveElement as _,
     Styled as _, Subscription, TestSupportExt as _, WeakEntity, Window, div, px,
 };
 use remindr_core::application::{Changes, Command};
@@ -21,12 +21,17 @@ use super::kinds::{kind_choices, kind_icon};
 use super::ui::icon_label;
 use crate::app::navigation::page_title;
 use crate::app::{WorkspaceModel, commands};
+use crate::theme::{
+    RADIUS_LG, TABLE_COLUMN_WIDTH, TABLE_HEADER, TABLE_ROW, TABLE_TITLE_WIDTH, UI_TEXT,
+    UI_TEXT_SMALL,
+};
 
-const DEFAULT_WIDTH: u32 = 200;
-const TITLE_WIDTH: u32 = 280;
-const ADD_WIDTH: f32 = 44.;
-const ROW_HEIGHT: f32 = 32.;
+const ADD_WIDTH: f32 = 40.;
 const MAX_ROWS: usize = 20;
+
+fn content_height(rows: usize) -> Pixels {
+    TABLE_HEADER + TABLE_ROW * rows as f32
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -59,7 +64,8 @@ impl Render for RowPreview {
         div()
             .px_3()
             .py_1()
-            .rounded(px(6.))
+            .rounded(RADIUS_LG)
+            .text_size(UI_TEXT)
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -89,9 +95,9 @@ impl Grid {
             .get(&property.id)
             .copied()
             .unwrap_or(if property.kind == PropertyKind::Title {
-                TITLE_WIDTH
+                TABLE_TITLE_WIDTH
             } else {
-                DEFAULT_WIDTH
+                TABLE_COLUMN_WIDTH
             })
     }
 
@@ -363,7 +369,7 @@ impl TableDelegate for Grid {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_xs()
+                    .text_size(UI_TEXT_SMALL)
                     .text_color(cx.theme().muted_foreground)
                     .bg(cx.theme().background)
                     .cursor_grab()
@@ -794,7 +800,10 @@ impl TableView {
 impl Render for TableView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.state.read(cx).delegate().rows.len();
-        let table = DataTable::new(&self.state).bordered(false);
+        let table = DataTable::new(&self.state)
+            .bordered(false)
+            .small()
+            .header_row_height(TABLE_HEADER);
         let new_row = Button::new("table-new-row")
             .ghost()
             .small()
@@ -811,24 +820,29 @@ impl Render for TableView {
             }))
             .child(new_row);
         match self.height {
-            Height::Rows => {
-                let lines = rows.min(MAX_ROWS) + 1;
-                v_flex()
-                    .id("table-view")
-                    .w_full()
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(ROW_HEIGHT * lines as f32 + 1.))
-                            .child(table),
-                    )
-                    .child(footer)
-            }
+            Height::Rows => v_flex()
+                .id("table-view")
+                .w_full()
+                .text_size(UI_TEXT)
+                .child(
+                    div()
+                        .w_full()
+                        .h(content_height(rows.min(MAX_ROWS)))
+                        .child(table),
+                )
+                .child(footer),
             Height::Fill => v_flex()
                 .id("table-view")
                 .size_full()
-                .child(div().flex_1().min_h_0().child(table))
-                .child(footer),
+                .text_size(UI_TEXT)
+                .child(
+                    div()
+                        .w_full()
+                        .h(content_height(rows))
+                        .min_h_0()
+                        .child(table),
+                )
+                .child(footer.flex_none()),
         }
     }
 }
@@ -836,14 +850,18 @@ impl Render for TableView {
 #[cfg(test)]
 mod tests {
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{ElementId, Entity, TestAppContext, point, px};
+    use gpui_kit::{ElementId, Entity, ScrollDelta, TestAppContext, point, px};
     use remindr_core::application::Command;
     use remindr_core::domain::{BlockId, PropertyKind, PropertyValue, Sort, SortDirection, ViewId};
 
     use crate::app::WorkspaceModel;
     use crate::app::testing::{execute, model_with};
-    use crate::database::ids::{cell_id, grip_id, header_id, option_id, rename_id, row_id};
-    use crate::database::testing::{Tasks, UiExt as _, open_block, tasks, titles, value_of};
+    use crate::database::ids::{
+        cell_id, cell_text_id, grip_id, header_id, open_row_id, option_id, rename_id, row_id,
+    };
+    use crate::database::testing::{
+        Tasks, UiExt as _, open_block, open_block_in_width, tasks, titles, value_of,
+    };
 
     type Model = Entity<WorkspaceModel>;
 
@@ -900,6 +918,71 @@ mod tests {
             ui.label(cx, header_id(tasks.title)).as_deref(),
             Some("Name")
         );
+    }
+
+    #[gpui_kit::test]
+    fn columns_render_at_their_default_widths(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        let width = |ui: &crate::app::testing::Ui, cx: &mut TestAppContext, id: ElementId| {
+            ui.find(cx, id).unwrap().bounds().size.width
+        };
+        let column = |index: u64| ElementId::NamedInteger("col-header".into(), index);
+        assert_eq!(width(&ui, cx, column(0)), px(280.));
+        assert_eq!(width(&ui, cx, column(1)), px(180.));
+        assert_eq!(width(&ui, cx, column(2)), px(180.));
+    }
+
+    #[gpui_kit::test]
+    fn the_title_cell_uses_the_whole_column_width(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        execute(
+            &model,
+            cx,
+            Command::SetColumnWidth {
+                view: tasks.view,
+                property: tasks.title,
+                width: 120,
+            },
+        );
+        let ui = open_block(cx, &model, tasks.block, tasks.database);
+        let column = ui
+            .find(cx, ElementId::NamedInteger("col-header".into(), 0))
+            .unwrap()
+            .bounds();
+        assert_eq!(column.size.width, px(120.));
+        let cell = ui
+            .find(cx, cell_id(tasks.rows[0], tasks.title))
+            .unwrap()
+            .bounds();
+        assert_eq!(cell.size.width, px(120.));
+        let text = ui
+            .find(cx, cell_text_id(tasks.rows[0], tasks.title))
+            .unwrap()
+            .bounds();
+        assert!(text.size.width >= cell.size.width - px(16.), "{text:?}");
+        let open = ui.find(cx, open_row_id(tasks.rows[0])).unwrap().bounds();
+        assert!(open.right() <= cell.right());
+        assert!(open.left() > cell.left());
+    }
+
+    #[gpui_kit::test]
+    fn a_table_wider_than_its_block_scrolls_horizontally(cx: &mut TestAppContext) {
+        let (model, tasks) = tasks_model(cx);
+        let ui = open_block_in_width(cx, &model, tasks.block, tasks.database, px(500.));
+        let last = header_id(tasks.priority);
+        let before = ui.find(cx, last.clone()).unwrap().bounds();
+        assert!(before.right() > px(500.), "{before:?}");
+        ui.with(cx, |window, cx| {
+            window.scroll("table", ScrollDelta::Pixels(point(px(-160.), px(0.))), cx);
+        });
+        ui.settle(cx);
+        let after = ui.find(cx, last).unwrap().bounds();
+        assert!(
+            after.left() < before.left() - px(100.),
+            "{before:?} {after:?}"
+        );
+        assert!(after.right() <= px(500.) + px(1.), "{after:?}");
     }
 
     #[gpui_kit::test]

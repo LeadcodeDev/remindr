@@ -8,6 +8,7 @@ use remindr_core::domain::{BlockId, BlockKind, Parent};
 use super::BlockEditor;
 use super::render::{GUTTER, INDENT};
 use super::rows::position;
+use crate::theme::{RADIUS_LG, UI_TEXT};
 
 pub const NEST_THRESHOLD: Pixels = px(24.);
 pub const PREVIEW_CHARS: usize = 40;
@@ -62,10 +63,10 @@ impl Render for DragPreview {
         div()
             .px(px(10.))
             .py(px(5.))
-            .rounded(px(6.))
+            .rounded(RADIUS_LG)
             .bg(self.background)
             .text_color(self.color)
-            .text_size(px(14.))
+            .text_size(UI_TEXT)
             .child(self.label.clone())
     }
 }

@@ -4,7 +4,7 @@ use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex};
 use gpui_kit::{
     Anchor, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TestSupportExt as _, Window, div, prelude::FluentBuilder as _, px,
+    TestSupportExt as _, Window, div, prelude::FluentBuilder as _,
 };
 use remindr_core::application::Command;
 use remindr_core::domain::{DatabaseId, ViewId};
@@ -14,6 +14,7 @@ use super::sort::SortPanel;
 use super::ui::icon_label;
 use crate::app::WorkspaceModel;
 use crate::app::commands;
+use crate::theme::{UI_TEXT_SMALL, labeled};
 
 pub struct Dismiss;
 
@@ -97,7 +98,7 @@ fn counted(
 ) -> Button {
     let pill = cx.theme().primary;
     let ink = cx.theme().primary_foreground;
-    button.label(label).when(count > 0, |this| {
+    labeled(button, label).when(count > 0, |this| {
         this.child(
             div()
                 .id(id)
@@ -107,7 +108,7 @@ fn counted(
                 .rounded_full()
                 .bg(pill)
                 .text_color(ink)
-                .text_size(px(10.))
+                .text_size(UI_TEXT_SMALL)
                 .child(count.to_string()),
         )
     })

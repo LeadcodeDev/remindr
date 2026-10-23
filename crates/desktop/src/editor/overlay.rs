@@ -7,9 +7,10 @@ use super::BlockEditor;
 use super::link::{ERROR_HEIGHT, LinkEntry, link_box};
 use super::palette::Palette;
 use super::slash::{Picker, Slash};
+use crate::theme::{RADIUS, RADIUS_LG, UI_TEXT, UI_TEXT_SMALL};
 
 pub const MENU_WIDTH: Pixels = px(320.);
-pub const ROW_HEIGHT: Pixels = px(28.);
+pub const ROW_HEIGHT: Pixels = px(26.);
 pub const MAX_ROWS: usize = 8;
 const GAP: Pixels = px(4.);
 const PAD: Pixels = px(4.);
@@ -134,7 +135,7 @@ pub fn list_menu(
             .flex()
             .flex_row()
             .items_center()
-            .rounded(px(4.))
+            .rounded(RADIUS)
             .when(chosen && enabled, |this| this.bg(palette.muted))
             .when(enabled, |this| {
                 this.cursor_pointer().hover(|style| style.bg(palette.muted))
@@ -148,7 +149,7 @@ pub fn list_menu(
             .children(row.detail.map(|detail| {
                 div()
                     .flex_none()
-                    .text_size(px(12.))
+                    .text_size(UI_TEXT_SMALL)
                     .text_color(palette.muted_foreground)
                     .child(detail)
                     .into_any_element()
@@ -192,12 +193,12 @@ pub fn surface(id: &'static str, palette: &Palette) -> impl ParentElement + Into
         .occlude()
         .w(MENU_WIDTH)
         .p(PAD)
-        .rounded(px(8.))
+        .rounded(RADIUS_LG)
         .border_1()
         .border_color(palette.border)
         .bg(palette.popover)
         .text_color(palette.popover_foreground)
-        .text_size(px(14.))
+        .text_size(UI_TEXT)
         .shadow_md()
 }
 

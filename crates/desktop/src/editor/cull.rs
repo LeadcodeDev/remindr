@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use gpui_kit::{Bounds, Pixels, px};
 use remindr_core::domain::{BlockId, BlockKind};
 
-pub const TEXT_ESTIMATE: Pixels = px(28.);
-pub const HEADING_ESTIMATE: Pixels = px(40.);
+pub const TEXT_ESTIMATE: Pixels = px(26.);
+pub const HEADING_ESTIMATE: Pixels = px(32.);
 pub const DATABASE_ESTIMATE: Pixels = px(120.);
 const SETTLED: Pixels = px(0.5);
 
@@ -157,7 +157,7 @@ mod tests {
     use gpui_kit::{Bounds, point, px, size};
     use remindr_core::domain::{BlockId, BlockKind, HeadingLevel, Uuid};
 
-    use super::{Class, Entry, Heights, Slot, View, plan};
+    use super::{Class, Entry, HEADING_ESTIMATE, Heights, Slot, TEXT_ESTIMATE, View, plan};
 
     fn id(n: u128) -> BlockId {
         BlockId::from_uuid(Uuid::from_u128(n))
@@ -192,12 +192,15 @@ mod tests {
     #[test]
     fn first_frame_estimates_depend_on_the_block_kind() {
         let heights = Heights::default();
-        assert_eq!(heights.estimate(Class::of(&BlockKind::Text)), px(28.));
+        assert_eq!(heights.estimate(Class::of(&BlockKind::Text)), TEXT_ESTIMATE);
         assert_eq!(
             heights.estimate(Class::of(&BlockKind::Heading(HeadingLevel::One))),
-            px(40.)
+            HEADING_ESTIMATE
         );
-        assert_eq!(heights.estimate(Class::of(&BlockKind::Quote)), px(28.));
+        assert_eq!(
+            heights.estimate(Class::of(&BlockKind::Quote)),
+            TEXT_ESTIMATE
+        );
     }
 
     #[test]
@@ -210,7 +213,7 @@ mod tests {
         });
         assert!(changed);
         assert_eq!(heights.estimate(Class::Text), px(30.));
-        assert_eq!(heights.estimate(Class::Heading), px(40.));
+        assert_eq!(heights.estimate(Class::Heading), HEADING_ESTIMATE);
         let settled = heights.observe(&[(id(1), wrapped), (id(2), one_line)], |_| {
             Some(Class::Text)
         });
@@ -251,7 +254,7 @@ mod tests {
             panic!("trailing gap");
         };
         assert_eq!(culled, 300 - rows.len());
-        assert_eq!(height, px(28. * culled as f32));
+        assert_eq!(height, TEXT_ESTIMATE * culled as f32);
     }
 
     #[test]
@@ -264,8 +267,14 @@ mod tests {
             &[],
         );
         let rows = rows_of(&slots);
-        assert!(rows.first().is_some_and(|first| (60..90).contains(first)));
-        assert!(rows.last().is_some_and(|last| (140..160).contains(last)));
+        let row = |offset: f32| (offset / TEXT_ESTIMATE.as_f32()) as usize;
+        let first = *rows.first().expect("rows");
+        let last = *rows.last().expect("rows");
+        assert!(
+            first.abs_diff(row(2400.)) < 10,
+            "first rendered row {first}"
+        );
+        assert!(last.abs_diff(row(4200.)) < 10, "last rendered row {last}");
         assert!(matches!(slots.first(), Some(Slot::Gap { .. })));
         assert!(matches!(slots.last(), Some(Slot::Gap { .. })));
         let kept = rows.len();
@@ -288,7 +297,7 @@ mod tests {
                 Slot::Row(index) => heights.of(&entries(300)[*index]).as_f32(),
             })
             .sum();
-        assert_eq!(total, 600. + 298. * 28.);
+        assert_eq!(total, 600. + 298. * TEXT_ESTIMATE.as_f32());
     }
 
     #[test]
@@ -321,7 +330,7 @@ mod tests {
                 .iter()
                 .map(|slot| match slot {
                     Slot::Gap { height, .. } => height.as_f32(),
-                    Slot::Row(_) => 28.,
+                    Slot::Row(_) => TEXT_ESTIMATE.as_f32(),
                 })
                 .sum()
         };
@@ -342,7 +351,7 @@ mod tests {
             class: Class::Heading,
         };
         assert_eq!(heights.of(&entry(1)), px(33.));
-        assert_eq!(heights.of(&entry(5)), px(40.));
+        assert_eq!(heights.of(&entry(5)), HEADING_ESTIMATE);
     }
 
     use gpui_kit::test::TestWindowExt;
@@ -502,7 +511,12 @@ mod tests {
     #[gpui_kit::test]
     fn clicking_a_row_after_scrolling_places_the_caret_in_it(cx: &mut TestAppContext) {
         let (fixture, blocks) = many(cx, 300);
-        scroll_to(&fixture, cx, 3000.);
+        let row: f32 = fixture
+            .with(cx, |window, _| {
+                window.find(row_id(blocks[0])).bounds().size.height
+            })
+            .into();
+        scroll_to(&fixture, cx, row * 100.);
         fixture.click_block(cx, blocks[112]);
         let caret = fixture.caret(cx).expect("caret");
         assert_eq!(caret.block, blocks[112]);

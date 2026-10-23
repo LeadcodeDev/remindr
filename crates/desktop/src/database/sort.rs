@@ -16,6 +16,7 @@ use super::kinds::kind_icon;
 use super::toolbar::Dismiss;
 use super::ui::icon_label;
 use crate::app::{WorkspaceModel, commands};
+use crate::theme::UI_TEXT;
 
 pub struct SortPanel {
     model: Entity<WorkspaceModel>,
@@ -170,6 +171,7 @@ impl Render for SortPanel {
                                     .w_full()
                                     .gap_1()
                                     .items_center()
+                                    .text_size(UI_TEXT)
                                     .child(Icon::new(icon).size_3())
                                     .child(div().truncate().child(name)),
                             )
@@ -231,13 +233,14 @@ impl Render for SortPanel {
             .test_support()
             .w(px(420.))
             .gap_2()
+            .text_size(UI_TEXT)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if this.menus_open == 0 {
                     cx.emit(Dismiss);
                 }
             }))
             .when(empty, |this| {
-                this.child(div().text_sm().text_color(muted).child("No sorts applied"))
+                this.child(div().text_color(muted).child("No sorts applied"))
             })
             .children(rows)
             .child(

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible};
-use gpui_kit::component::{Icon, IconName, h_flex, v_flex};
+use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     App, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
     Window,
@@ -17,6 +17,7 @@ use remindr_core::domain::{BlockId, DatabaseId};
 use crate::app::commands;
 use crate::app::navigation::{affects_navigation, alive_page, page_ancestors};
 use crate::app::{Navigator, Route, WorkspaceModel};
+use crate::theme::{SIDEBAR_ICON, SIDEBAR_ROW, UI_TEXT};
 
 pub use entries::*;
 use section::Section;
@@ -168,7 +169,8 @@ fn footer_label(icon: IconName, label: &'static str) -> impl IntoElement {
         .w_full()
         .gap_2()
         .items_center()
-        .child(Icon::new(icon).size_4())
+        .text_size(UI_TEXT)
+        .child(Icon::new(icon).size(SIDEBAR_ICON))
         .child(label)
 }
 
@@ -181,7 +183,9 @@ fn footer(handles: &Handles) -> impl IntoElement {
         .child(
             Button::new("new-page")
                 .ghost()
+                .small()
                 .w_full()
+                .h(SIDEBAR_ROW)
                 .accessibility_label("New page")
                 .child(footer_label(IconName::Plus, "New page"))
                 .on_click(move |_, window, cx| pages.add_root_page(window, cx)),
@@ -189,7 +193,9 @@ fn footer(handles: &Handles) -> impl IntoElement {
         .child(
             Button::new("new-database")
                 .ghost()
+                .small()
                 .w_full()
+                .h(SIDEBAR_ROW)
                 .accessibility_label("New database")
                 .child(footer_label(IconName::LayoutDashboard, "New database"))
                 .on_click(move |_, window, cx| databases.add_database(window, cx)),
@@ -199,7 +205,7 @@ fn footer(handles: &Handles) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{Entity, TestAppContext};
+    use gpui_kit::{Entity, TestAppContext, px};
     use remindr_core::application::Command;
     use remindr_core::domain::{BlockId, Parent};
 
@@ -257,6 +263,27 @@ mod tests {
         assert_eq!(child_entry.label(), Some("Untitled"));
         assert!(child_entry.bounds().top() > parent_entry.bounds().top());
         assert!(child_entry.bounds().left() > parent_entry.bounds().left());
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_entries_are_compact_rows(cx: &mut TestAppContext) {
+        let (mut parent, mut child) = (None, None);
+        let model = model_with(cx, |session| {
+            let page = add_page(session, Parent::Root, "Parent");
+            parent = Some(page);
+            child = Some(add_page(session, Parent::Block(page), "Child"));
+        });
+        let (parent, child) = (parent.unwrap(), child.unwrap());
+        let ui = Ui::open(cx, &model);
+        ui.click(cx, page_toggle_id(parent));
+        let parent_row = ui.find(cx, page_entry_id(parent)).unwrap().bounds();
+        let child_row = ui.find(cx, page_entry_id(child)).unwrap().bounds();
+        assert_eq!(parent_row.size.height, px(26.));
+        assert_eq!(child_row.size.height, px(26.));
+        let parent_label = ui.find(cx, page_open_id(parent)).unwrap().bounds();
+        let child_label = ui.find(cx, page_open_id(child)).unwrap().bounds();
+        let indent = f32::from(child_label.left() - parent_label.left());
+        assert!((indent - 14.).abs() < 0.5, "indent {indent}");
     }
 
     #[gpui_kit::test]
