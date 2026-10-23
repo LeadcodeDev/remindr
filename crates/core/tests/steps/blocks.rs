@@ -1,7 +1,9 @@
 use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
 use remindr_core::application::{Command, Created, DropTarget, TextPoint};
-use remindr_core::domain::{BlockId, BlockKind, CodeLanguage, HeadingLevel, Parent, RichText};
+use remindr_core::domain::{
+    BlockId, BlockKind, CodeLanguage, HeadingLevel, Parent, PropertyKind, PropertyValue, RichText,
+};
 
 use crate::{RemindrWorld, run_feature};
 
@@ -134,6 +136,64 @@ fn page_has_blocks(world: &mut RemindrWorld, step: &Step, page: String) {
             .insert(cell(header, row, "name").to_owned(), block);
     }
     world.clock.advance(SETTLE_MS);
+}
+
+#[given(expr = "the database {string} holds the row {string}")]
+fn database_holds_row(world: &mut RemindrWorld, database_name: String, row: String) {
+    run_ok(world, Command::CreateDatabase);
+    let database = match world.changes().created.first() {
+        Some(Created::Database(id)) => *id,
+        other => panic!("no database was created: {other:?}"),
+    };
+    world.databases.insert(database_name, database);
+    run_ok(
+        world,
+        Command::AddProperty {
+            database,
+            name: "Notes".to_owned(),
+            kind: PropertyKind::Text,
+        },
+    );
+    let property = world
+        .session
+        .workspace()
+        .database(database)
+        .expect("the database exists")
+        .schema
+        .properties
+        .iter()
+        .find(|property| property.name == "Notes")
+        .expect("the property exists")
+        .id;
+    run_ok(
+        world,
+        Command::AddRow {
+            database,
+            values: vec![(property, PropertyValue::Text("x".to_owned()))],
+        },
+    );
+    let block = created_block(world);
+    world.blocks.insert(row, block);
+}
+
+#[when(expr = "I move the page {string} to the top level")]
+fn move_to_top_level(world: &mut RemindrWorld, name: String) {
+    let block = world.block(&name);
+    let target = DropTarget {
+        parent: Parent::Root,
+        after: None,
+    };
+    world.run(Command::MoveBlock { block, target });
+}
+
+#[when(expr = "I move the page {string} into the database {string}")]
+fn move_into_database(world: &mut RemindrWorld, name: String, database: String) {
+    let block = world.block(&name);
+    let target = DropTarget {
+        parent: Parent::Database(world.database(&database)),
+        after: None,
+    };
+    world.run(Command::MoveBlock { block, target });
 }
 
 #[when(expr = "I type {string} in the empty page {string}")]

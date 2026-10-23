@@ -46,26 +46,29 @@ impl History {
         });
     }
 
-    pub(crate) fn take_undo(&mut self) -> Option<Entry> {
-        let entry = self.undo.pop()?;
-        if let Some(top) = self.undo.last_mut() {
-            top.edit = None;
+    pub(crate) fn peek_undo(&self) -> Option<&Entry> {
+        self.undo.last()
+    }
+
+    pub(crate) fn peek_redo(&self) -> Option<&Entry> {
+        self.redo.last()
+    }
+
+    pub(crate) fn finish_undo(&mut self) {
+        if let Some(mut entry) = self.undo.pop() {
+            if let Some(top) = self.undo.last_mut() {
+                top.edit = None;
+            }
+            entry.edit = None;
+            self.redo.push(entry);
         }
-        Some(entry)
     }
 
-    pub(crate) fn take_redo(&mut self) -> Option<Entry> {
-        self.redo.pop()
-    }
-
-    pub(crate) fn push_undo(&mut self, mut entry: Entry) {
-        entry.edit = None;
-        self.undo.push(entry);
-    }
-
-    pub(crate) fn push_redo(&mut self, mut entry: Entry) {
-        entry.edit = None;
-        self.redo.push(entry);
+    pub(crate) fn finish_redo(&mut self) {
+        if let Some(mut entry) = self.redo.pop() {
+            entry.edit = None;
+            self.undo.push(entry);
+        }
     }
 
     pub(crate) fn can_undo(&self) -> bool {
@@ -92,7 +95,7 @@ fn chain(first: &Transaction, second: &Transaction) -> Transaction {
 mod tests {
     use crate::domain::{BlockId, Operation, Timestamp, Transaction};
 
-    use super::{Edit, History};
+    use super::{Edit, Entry, History};
 
     fn step(block: BlockId, alive: bool) -> Transaction {
         Transaction::new(vec![Operation::SetBlockAlive { block, alive }])
@@ -105,13 +108,37 @@ mod tests {
         })
     }
 
+    fn undo_one(history: &mut History) -> Option<Entry> {
+        let entry = history.peek_undo().cloned();
+        history.finish_undo();
+        entry
+    }
+
+    fn redo_one(history: &mut History) -> Option<Entry> {
+        let entry = history.peek_redo().cloned();
+        history.finish_redo();
+        entry
+    }
+
+    fn undo_all(history: &mut History) -> usize {
+        let mut count = 0;
+        while undo_one(history).is_some() {
+            count += 1;
+        }
+        count
+    }
+
     #[test]
     fn a_fresh_history_has_nothing_to_undo_or_redo() {
         let mut history = History::default();
         assert!(!history.can_undo());
         assert!(!history.can_redo());
-        assert!(history.take_undo().is_none());
-        assert!(history.take_redo().is_none());
+        assert!(history.peek_undo().is_none());
+        assert!(history.peek_redo().is_none());
+        history.finish_undo();
+        history.finish_redo();
+        assert!(!history.can_undo());
+        assert!(!history.can_redo());
     }
 
     #[test]
@@ -120,7 +147,7 @@ mod tests {
         let mut history = History::default();
         history.record(step(block, true), step(block, false), edit(block, 0));
         history.record(step(block, false), step(block, true), edit(block, 400));
-        let entry = history.take_undo().unwrap();
+        let entry = undo_one(&mut history).unwrap();
         assert_eq!(
             entry.forward.operations(),
             [
@@ -141,7 +168,7 @@ mod tests {
                 },
             ]
         );
-        assert!(history.take_undo().is_none());
+        assert!(undo_one(&mut history).is_none());
     }
 
     #[test]
@@ -151,7 +178,7 @@ mod tests {
         let mut history = History::default();
         history.record(step(block, true), step(block, false), edit(block, 0));
         history.record(step(other, true), step(other, false), edit(block, 10));
-        let entry = history.take_undo().unwrap();
+        let entry = undo_one(&mut history).unwrap();
         assert_eq!(
             entry.inverse.operations(),
             [
@@ -175,9 +202,7 @@ mod tests {
         history.record(step(block, true), step(block, false), edit(block, 999));
         history.record(step(block, true), step(block, false), edit(block, 1_998));
         history.record(step(block, true), step(block, false), edit(block, 2_998));
-        assert!(history.take_undo().is_some());
-        assert!(history.take_undo().is_some());
-        assert!(history.take_undo().is_none());
+        assert_eq!(undo_all(&mut history), 2);
     }
 
     #[test]
@@ -189,11 +214,7 @@ mod tests {
         history.record(step(second, true), step(second, false), edit(second, 10));
         history.record(step(second, false), step(second, true), None);
         history.record(step(second, true), step(second, false), edit(second, 20));
-        let mut count = 0;
-        while history.take_undo().is_some() {
-            count += 1;
-        }
-        assert_eq!(count, 4);
+        assert_eq!(undo_all(&mut history), 4);
     }
 
     #[test]
@@ -202,8 +223,7 @@ mod tests {
         let mut history = History::default();
         history.record(step(block, true), step(block, false), edit(block, 500));
         history.record(step(block, true), step(block, false), edit(block, 100));
-        assert!(history.take_undo().is_some());
-        assert!(history.take_undo().is_some());
+        assert_eq!(undo_all(&mut history), 2);
     }
 
     #[test]
@@ -211,38 +231,58 @@ mod tests {
         let block = BlockId::new();
         let mut history = History::default();
         history.record(step(block, true), step(block, false), None);
-        let entry = history.take_undo().unwrap();
-        history.push_redo(entry);
+        history.finish_undo();
         assert!(history.can_redo());
         history.record(step(block, true), step(block, false), None);
         assert!(!history.can_redo());
     }
 
     #[test]
-    fn taking_an_entry_seals_the_one_below_it() {
+    fn finishing_an_undo_seals_the_entry_below_it() {
         let block = BlockId::new();
         let mut history = History::default();
         history.record(step(block, true), step(block, false), edit(block, 0));
         history.record(step(block, true), step(block, false), edit(block, 2_000));
-        let entry = history.take_undo().unwrap();
-        history.push_redo(entry);
+        history.finish_undo();
         history.record(step(block, true), step(block, false), edit(block, 2_100));
-        assert!(history.take_undo().is_some());
-        assert!(history.take_undo().is_some());
-        assert!(history.take_undo().is_none());
+        assert_eq!(undo_all(&mut history), 2);
     }
 
     #[test]
-    fn an_entry_pushed_back_on_the_undo_stack_never_merges() {
+    fn peeking_leaves_the_history_and_its_coalescing_state_unchanged() {
         let block = BlockId::new();
         let mut history = History::default();
         history.record(step(block, true), step(block, false), edit(block, 0));
-        let entry = history.take_undo().unwrap();
-        history.push_redo(entry);
-        let entry = history.take_redo().unwrap();
-        history.push_undo(entry);
+        assert!(history.peek_undo().is_some());
+        assert!(history.peek_redo().is_none());
+        history.record(step(block, true), step(block, false), edit(block, 200));
+        assert_eq!(undo_all(&mut history), 1);
+    }
+
+    #[test]
+    fn an_entry_moved_back_to_the_undo_stack_never_merges() {
+        let block = BlockId::new();
+        let mut history = History::default();
+        history.record(step(block, true), step(block, false), edit(block, 0));
+        history.finish_undo();
+        history.finish_redo();
         history.record(step(block, true), step(block, false), edit(block, 10));
-        assert!(history.take_undo().is_some());
-        assert!(history.take_undo().is_some());
+        assert_eq!(undo_all(&mut history), 2);
+    }
+
+    #[test]
+    fn redo_returns_entries_in_the_order_they_were_undone() {
+        let first = BlockId::new();
+        let second = BlockId::new();
+        let mut history = History::default();
+        history.record(step(first, true), step(first, false), None);
+        history.record(step(second, true), step(second, false), None);
+        undo_one(&mut history);
+        undo_one(&mut history);
+        let entry = redo_one(&mut history).unwrap();
+        assert_eq!(entry.forward, step(first, true));
+        let entry = redo_one(&mut history).unwrap();
+        assert_eq!(entry.forward, step(second, true));
+        assert!(redo_one(&mut history).is_none());
     }
 }

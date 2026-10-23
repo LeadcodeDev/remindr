@@ -45,7 +45,7 @@ impl<S: WorkspaceStore, C: Clock> Session<S, C> {
                 ..Changes::default()
             });
         }
-        let inverse = self.apply_and_commit(&built.transaction)?;
+        let inverse = apply_and_commit(&mut self.workspace, &mut self.store, &built.transaction)?;
         let edit = match &command {
             Command::EditText { block, .. } => Some(Edit {
                 block: *block,
@@ -59,37 +59,23 @@ impl<S: WorkspaceStore, C: Clock> Session<S, C> {
     }
 
     pub fn undo(&mut self) -> Result<Option<Changes>, SessionError> {
-        let Some(entry) = self.history.take_undo() else {
+        let Some(entry) = self.history.peek_undo() else {
             return Ok(None);
         };
-        match self.apply_and_commit(&entry.inverse) {
-            Ok(_) => {
-                let changes = changes_of(&entry.inverse, Vec::new(), None);
-                self.history.push_redo(entry);
-                Ok(Some(changes))
-            }
-            Err(error) => {
-                self.history.push_undo(entry);
-                Err(error)
-            }
-        }
+        apply_and_commit(&mut self.workspace, &mut self.store, &entry.inverse)?;
+        let changes = changes_of(&entry.inverse, Vec::new(), None);
+        self.history.finish_undo();
+        Ok(Some(changes))
     }
 
     pub fn redo(&mut self) -> Result<Option<Changes>, SessionError> {
-        let Some(entry) = self.history.take_redo() else {
+        let Some(entry) = self.history.peek_redo() else {
             return Ok(None);
         };
-        match self.apply_and_commit(&entry.forward) {
-            Ok(_) => {
-                let changes = changes_of(&entry.forward, Vec::new(), None);
-                self.history.push_undo(entry);
-                Ok(Some(changes))
-            }
-            Err(error) => {
-                self.history.push_redo(entry);
-                Err(error)
-            }
-        }
+        apply_and_commit(&mut self.workspace, &mut self.store, &entry.forward)?;
+        let changes = changes_of(&entry.forward, Vec::new(), None);
+        self.history.finish_redo();
+        Ok(Some(changes))
     }
 
     #[must_use]
@@ -101,16 +87,21 @@ impl<S: WorkspaceStore, C: Clock> Session<S, C> {
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
     }
+}
 
-    fn apply_and_commit(&mut self, transaction: &Transaction) -> Result<Transaction, SessionError> {
-        let inverse = self.workspace.apply(transaction)?;
-        if let Err(error) = self.store.commit(transaction) {
-            let restored = self.workspace.apply(&inverse);
-            debug_assert!(restored.is_ok());
-            return Err(error.into());
+fn apply_and_commit<S: WorkspaceStore>(
+    workspace: &mut Workspace,
+    store: &mut S,
+    transaction: &Transaction,
+) -> Result<Transaction, SessionError> {
+    let inverse = workspace.apply(transaction)?;
+    if let Err(error) = store.commit(transaction) {
+        if workspace.apply(&inverse).is_err() {
+            *workspace = Workspace::from_snapshot(store.load()?)?;
         }
-        Ok(inverse)
+        return Err(error.into());
     }
+    Ok(inverse)
 }
 
 fn changes_of(
@@ -426,6 +417,35 @@ mod tests {
         edit(&mut harness, block, "a");
         harness.store.fail_next_commit();
         assert!(harness.session.undo().is_err());
+        assert_eq!(text_of(&harness, block), "a");
+        assert!(!harness.session.can_redo());
+        harness.session.undo().unwrap();
+        assert_eq!(text_of(&harness, block), "");
+    }
+
+    #[test]
+    fn failed_undo_leaves_the_history_and_the_coalescing_state_unchanged() {
+        let mut harness = harness();
+        let block = page_with_block(&mut harness);
+        edit(&mut harness, block, "a");
+        harness.store.fail_next_commit();
+        assert!(harness.session.undo().is_err());
+        harness.clock.advance(200);
+        edit(&mut harness, block, "ab");
+        harness.session.undo().unwrap();
+        assert_eq!(text_of(&harness, block), "");
+        assert!(harness.session.can_redo());
+    }
+
+    #[test]
+    fn failed_redo_leaves_the_history_unchanged() {
+        let mut harness = harness();
+        let block = page_with_block(&mut harness);
+        edit(&mut harness, block, "a");
+        harness.session.undo().unwrap();
+        harness.store.fail_next_commit();
+        assert!(harness.session.redo().is_err());
+        harness.session.redo().unwrap();
         assert_eq!(text_of(&harness, block), "a");
         assert!(!harness.session.can_redo());
         harness.session.undo().unwrap();

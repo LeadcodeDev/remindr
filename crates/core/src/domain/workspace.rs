@@ -118,12 +118,15 @@ impl Workspace {
     }
 
     pub fn apply(&mut self, transaction: &Transaction) -> Result<Transaction, DomainError> {
+        let backup = (transaction.operations().len() > 1).then(|| self.clone());
         let mut applied = Vec::with_capacity(transaction.operations().len());
         for operation in transaction.operations() {
             match self.apply_operation(operation) {
                 Ok(inverse) => applied.push(inverse),
                 Err(error) => {
-                    self.roll_back(applied);
+                    if let Some(backup) = backup {
+                        *self = backup;
+                    }
                     return Err(error);
                 }
             }
@@ -137,13 +140,6 @@ impl Workspace {
             self.apply_block_operation(operation)
         } else {
             self.apply_database_operation(operation)
-        }
-    }
-
-    fn roll_back(&mut self, mut applied: Vec<Operation>) {
-        while let Some(inverse) = applied.pop() {
-            let restored = self.apply_operation(&inverse);
-            debug_assert!(restored.is_ok());
         }
     }
 
@@ -171,6 +167,7 @@ impl Workspace {
             return Err(DomainError::AlreadyExists);
         }
         self.check_placement(&block.kind, block.parent, block.alive)?;
+        check_text(&block.kind, &block.text)?;
         self.index_insert(block.parent, &block.sort_key, block.id);
         self.blocks.insert(block.id, block.clone());
         Ok(Operation::RemoveBlock { block: block.id })
@@ -202,6 +199,7 @@ impl Workspace {
             .blocks
             .get_mut(&id)
             .ok_or(DomainError::UnknownBlock(id))?;
+        check_text(&block.kind, text)?;
         let old = std::mem::replace(&mut block.text, text.clone());
         Ok(Operation::SetText {
             block: id,
@@ -211,10 +209,14 @@ impl Workspace {
 
     fn set_kind(&mut self, id: BlockId, kind: &BlockKind) -> Result<Operation, DomainError> {
         let block = self.blocks.get(&id).ok_or(DomainError::UnknownBlock(id))?;
+        if block.kind != *kind && self.views.values().any(|view| view.block == id) {
+            return Err(DomainError::StillReferenced);
+        }
         if !kind.accepts_children() && self.children(Parent::Block(id)).next().is_some() {
             return Err(DomainError::ChildrenNotAllowed);
         }
         self.check_kind_at(kind, block.parent)?;
+        check_text(kind, &block.text)?;
         let block = self
             .blocks
             .get_mut(&id)
@@ -233,6 +235,12 @@ impl Workspace {
         sort_key: &SortKey,
     ) -> Result<Operation, DomainError> {
         let block = self.blocks.get(&id).ok_or(DomainError::UnknownBlock(id))?;
+        let crosses_database = block.parent != parent
+            && (matches!(block.parent, Parent::Database(_))
+                || matches!(parent, Parent::Database(_)));
+        if crosses_database {
+            return Err(DomainError::InvalidParent);
+        }
         if let Parent::Block(target) = parent
             && self
                 .ancestors_or_self(target)
@@ -336,6 +344,7 @@ impl Workspace {
         blocks.sort_by_key(|block| block.id);
         for block in blocks {
             self.check_placement(&block.kind, block.parent, block.alive)?;
+            check_text(&block.kind, &block.text)?;
             if self.has_cycle(block.id) {
                 return Err(DomainError::CycleDetected);
             }
@@ -359,6 +368,17 @@ impl Workspace {
         }
     }
 }
+
+fn check_text(kind: &BlockKind, text: &RichText) -> Result<(), DomainError> {
+    if kind.is_atomic() && !text.is_empty() {
+        Err(DomainError::TextNotAllowed)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fuzz;
 
 #[cfg(test)]
 mod tests {
@@ -738,13 +758,18 @@ mod tests {
         let owner_id = owner.id;
         workspace.databases.insert(owner_id, owner);
         workspace
-            .apply_block_operation(&Operation::Move {
-                block: id(1),
-                parent: Parent::Database(owner_id),
-                sort_key: key("V"),
-            })
+            .apply_block_operation(&Operation::InsertBlock(block(
+                6,
+                page(),
+                Parent::Database(owner_id),
+                "V",
+            )))
             .unwrap();
-        assert_rejected(&mut workspace, &operation, DomainError::InvalidParent);
+        let row_to_text = Operation::SetKind {
+            block: id(6),
+            kind: BlockKind::Text,
+        };
+        assert_rejected(&mut workspace, &row_to_text, DomainError::InvalidParent);
     }
 
     #[test]
@@ -826,11 +851,7 @@ mod tests {
             parent: Parent::Database(missing),
             sort_key: key("V"),
         };
-        assert_rejected(
-            &mut workspace,
-            &to_database,
-            DomainError::UnknownDatabase(missing),
-        );
+        assert_rejected(&mut workspace, &to_database, DomainError::InvalidParent);
     }
 
     #[test]
@@ -875,6 +896,245 @@ mod tests {
             }
         );
         workspace.apply_block_operation(&inverse).unwrap();
+        assert_eq!(workspace, before);
+    }
+
+    fn with_rows() -> (Workspace, DatabaseId, DatabaseId) {
+        let mut workspace = base();
+        let first = database("V");
+        let second = database("k");
+        let ids = (first.id, second.id);
+        workspace.databases.insert(first.id, first);
+        workspace.databases.insert(second.id, second);
+        for (n, owner, order) in [(6, ids.0, "V"), (7, ids.0, "k"), (8, ids.1, "V")] {
+            workspace
+                .apply_block_operation(&Operation::InsertBlock(block(
+                    n,
+                    page(),
+                    Parent::Database(owner),
+                    order,
+                )))
+                .unwrap();
+        }
+        (workspace, ids.0, ids.1)
+    }
+
+    fn with_embed() -> (Workspace, DatabaseId, DatabaseId, ViewId) {
+        let (mut workspace, first, second) = with_rows();
+        workspace
+            .apply_block_operation(&Operation::InsertBlock(block(
+                9,
+                BlockKind::DatabaseView { database: first },
+                Parent::Block(id(1)),
+                "x",
+            )))
+            .unwrap();
+        let view = view_of(id(9));
+        let view_id = view.id;
+        workspace.views.insert(view_id, view);
+        (workspace, first, second, view_id)
+    }
+
+    #[test]
+    fn move_of_a_row_out_of_its_database_is_rejected() {
+        let (mut workspace, _, _) = with_rows();
+        for parent in [Parent::Root, Parent::Block(id(1))] {
+            let operation = Operation::Move {
+                block: id(6),
+                parent,
+                sort_key: key("V"),
+            };
+            assert_rejected(&mut workspace, &operation, DomainError::InvalidParent);
+        }
+    }
+
+    #[test]
+    fn move_of_a_page_into_a_database_is_rejected() {
+        let (mut workspace, first, _) = with_rows();
+        workspace
+            .apply_block_operation(&Operation::InsertBlock(block(
+                10,
+                page(),
+                Parent::Block(id(1)),
+                "x",
+            )))
+            .unwrap();
+        for moved in [1, 10] {
+            let operation = Operation::Move {
+                block: id(moved),
+                parent: Parent::Database(first),
+                sort_key: key("V"),
+            };
+            assert_rejected(&mut workspace, &operation, DomainError::InvalidParent);
+        }
+    }
+
+    #[test]
+    fn move_of_a_row_between_databases_is_rejected() {
+        let (mut workspace, _, second) = with_rows();
+        let operation = Operation::Move {
+            block: id(6),
+            parent: Parent::Database(second),
+            sort_key: key("A"),
+        };
+        assert_rejected(&mut workspace, &operation, DomainError::InvalidParent);
+    }
+
+    #[test]
+    fn move_inside_a_database_reorders_the_rows() {
+        let (mut workspace, first, _) = with_rows();
+        let before = workspace.clone();
+        let inverse = workspace
+            .apply_block_operation(&Operation::Move {
+                block: id(7),
+                parent: Parent::Database(first),
+                sort_key: key("A"),
+            })
+            .unwrap();
+        assert_eq!(
+            child_ids(&workspace, Parent::Database(first)),
+            [id(7), id(6)]
+        );
+        workspace.apply_block_operation(&inverse).unwrap();
+        assert_eq!(workspace, before);
+    }
+
+    #[test]
+    fn set_kind_of_a_block_that_owns_views_is_still_referenced() {
+        let (mut workspace, _, second, _) = with_embed();
+        for kind in [
+            BlockKind::Text,
+            BlockKind::DatabaseView { database: second },
+        ] {
+            let operation = Operation::SetKind { block: id(9), kind };
+            assert_rejected(&mut workspace, &operation, DomainError::StillReferenced);
+        }
+    }
+
+    #[test]
+    fn set_kind_to_the_same_database_view_keeps_the_views() {
+        let (mut workspace, first, _, _) = with_embed();
+        let same = Operation::SetKind {
+            block: id(9),
+            kind: BlockKind::DatabaseView { database: first },
+        };
+        assert!(workspace.apply_block_operation(&same).is_ok());
+    }
+
+    #[test]
+    fn set_kind_of_a_view_less_database_view_block_is_allowed() {
+        let (mut workspace, _, _, view) = with_embed();
+        workspace.views.remove(&view);
+        let operation = Operation::SetKind {
+            block: id(9),
+            kind: BlockKind::Text,
+        };
+        assert!(workspace.apply_block_operation(&operation).is_ok());
+    }
+
+    #[test]
+    fn set_text_on_an_atomic_block_is_text_not_allowed() {
+        let mut workspace = base();
+        let operation = Operation::SetText {
+            block: id(4),
+            text: RichText::plain("x"),
+        };
+        assert_rejected(&mut workspace, &operation, DomainError::TextNotAllowed);
+        let clearing = Operation::SetText {
+            block: id(4),
+            text: RichText::default(),
+        };
+        assert!(workspace.apply_block_operation(&clearing).is_ok());
+    }
+
+    #[test]
+    fn insert_of_an_atomic_block_with_text_is_text_not_allowed() {
+        let (mut workspace, first, _) = with_rows();
+        let mut divider = block(9, BlockKind::Divider, Parent::Block(id(1)), "x");
+        divider.text = RichText::plain("x");
+        assert_rejected(
+            &mut workspace,
+            &Operation::InsertBlock(divider),
+            DomainError::TextNotAllowed,
+        );
+        let mut embed = block(
+            9,
+            BlockKind::DatabaseView { database: first },
+            Parent::Block(id(1)),
+            "x",
+        );
+        embed.text = RichText::plain("x");
+        assert_rejected(
+            &mut workspace,
+            &Operation::InsertBlock(embed),
+            DomainError::TextNotAllowed,
+        );
+    }
+
+    #[test]
+    fn set_kind_to_an_atomic_kind_with_text_is_text_not_allowed() {
+        let mut workspace = base();
+        workspace
+            .apply_block_operation(&Operation::SetText {
+                block: id(3),
+                text: RichText::plain("x"),
+            })
+            .unwrap();
+        let operation = Operation::SetKind {
+            block: id(3),
+            kind: BlockKind::Divider,
+        };
+        assert_rejected(&mut workspace, &operation, DomainError::TextNotAllowed);
+    }
+
+    #[test]
+    fn snapshot_with_text_on_an_atomic_block_is_rejected() {
+        let mut divider = block(2, BlockKind::Divider, Parent::Block(id(1)), "V");
+        divider.text = RichText::plain("x");
+        let result =
+            Workspace::from_snapshot(snapshot(vec![block(1, page(), Parent::Root, "V"), divider]));
+        assert_eq!(result, Err(DomainError::TextNotAllowed));
+    }
+
+    #[test]
+    fn failed_transaction_with_remove_view_then_invalid_move_leaves_the_workspace_unchanged() {
+        let (mut workspace, _, _, view) = with_embed();
+        let before = workspace.clone();
+        let transaction = Transaction::new(vec![
+            Operation::RemoveView { view },
+            Operation::Move {
+                block: id(9),
+                parent: Parent::Root,
+                sort_key: key("V"),
+            },
+        ]);
+        assert_eq!(
+            workspace.apply(&transaction),
+            Err(DomainError::InvalidParent)
+        );
+        assert_eq!(workspace, before);
+    }
+
+    #[test]
+    fn failed_transaction_restores_every_earlier_database_and_block_change() {
+        let (mut workspace, first, _, _) = with_embed();
+        let before = workspace.clone();
+        let transaction = Transaction::new(vec![
+            Operation::SetDatabaseName {
+                database: first,
+                name: "Renamed".to_owned(),
+            },
+            Operation::SetText {
+                block: id(2),
+                text: RichText::plain("changed"),
+            },
+            Operation::Move {
+                block: id(6),
+                parent: Parent::Root,
+                sort_key: key("V"),
+            },
+        ]);
+        assert!(workspace.apply(&transaction).is_err());
         assert_eq!(workspace, before);
     }
 

@@ -58,6 +58,19 @@ Feature: Blocks
     And the children of "Notes" read:
       | "Held" |
 
+  @spec-v1-5
+  Scenario: Deleting a range from a divider into a block removes the divider and keeps the tail
+    Given a page "Notes"
+    And the page "Notes" has the blocks:
+      | name | kind    | text  |
+      | d    | divider |       |
+      | t    | text    | hello |
+    When I delete from offset 0 of "d" to offset 2 of "t"
+    Then the command succeeds
+    And the children of "Notes" read:
+      | "llo" |
+    And block "d" is deleted
+
   @spec-v1-8
   Scenario: Indent nests under the previous sibling and outdent places it after its former parent
     Given a page "Notes"
@@ -164,6 +177,33 @@ Feature: Blocks
     Then the page "Notes" is listed among the pages
     And block "a" is alive
     And block "b" is alive
+
+  @spec-v1-14
+  Scenario: A deleted block cannot be edited
+    Given a page "Notes"
+    And the page "Notes" has the blocks:
+      | name | text  |
+      | a    | alpha |
+    When I delete the page "Notes"
+    And I type "x" into "a"
+    Then the command is rejected
+    And the workspace is unchanged
+
+  @spec-v1-20
+  Scenario: A row cannot be moved out of its database
+    Given a page "Notes"
+    And the database "Tasks" holds the row "Write"
+    When I move the page "Write" to the top level
+    Then the command is rejected
+    And the workspace is unchanged
+
+  @spec-v1-20
+  Scenario: A page cannot be moved into a database
+    Given a page "Notes"
+    And the database "Tasks" holds the row "Write"
+    When I move the page "Notes" into the database "Tasks"
+    Then the command is rejected
+    And the workspace is unchanged
 
   @spec-v1-35
   Scenario: A commit failure leaves the workspace unchanged
