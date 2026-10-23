@@ -1,18 +1,9 @@
-# 🦀 Remindr
+# Remindr
 
-An **open-source** and **self-hostable** alternative to Notion built with 🦀Rust and GPUI.
+A local-only alternative to Notion, written in Rust with [GPUI-kit](https://gpui-kit.com). Pages are trees of blocks; databases hold rows with typed properties and show up in pages through table and board views. Everything stays on your machine in one SQLite file: `~/Library/Application Support/Remindr/workspace.db`.
 
-<img width="1744" height="1058" alt="image" src="https://github.com/user-attachments/assets/457064ea-9f84-4099-b20c-8be5f2dfe9d6" />
-
----
-
-## Installation
-
-Install the project using git.
+macOS only for now.
 
 ```bash
-git clone git@github.com:LeadcodeDev/remindr.git
-cd ./remindr
-
-cargo run --bin remindr_gpui
+cargo run -p remindr-desktop --release
 ```
