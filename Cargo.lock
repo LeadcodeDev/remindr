@@ -6113,6 +6113,7 @@ name = "remindr-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui-kit",
  "remindr-core",
  "remindr-store",
