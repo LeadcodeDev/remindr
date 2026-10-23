@@ -13,6 +13,7 @@ remindr-core.workspace = true
 remindr-store.workspace = true
 gpui-kit.workspace = true
 anyhow.workspace = true
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 remindr-core = { workspace = true, features = ["test-support"] }

@@ -13,6 +13,7 @@ remindr-store = { path = "crates/store" }
 uuid = { version = "1.28", features = ["v7"] }
 thiserror = "2"
 anyhow = "1"
+unicode-segmentation = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

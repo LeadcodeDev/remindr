@@ -34,6 +34,10 @@ pub enum Command {
         target: DropTarget,
         kind: BlockKind,
     },
+    PasteText {
+        at: TextPoint,
+        text: String,
+    },
     EditText {
         block: BlockId,
         text: RichText,
@@ -197,6 +201,7 @@ impl Command {
             Self::CreatePage { .. }
                 | Self::InsertBlock { .. }
                 | Self::InsertBlockAt { .. }
+                | Self::PasteText { .. }
                 | Self::EditText { .. }
                 | Self::SplitBlock { .. }
                 | Self::MergeWithPrevious { .. }

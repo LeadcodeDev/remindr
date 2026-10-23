@@ -1,7 +1,11 @@
-use gpui_kit::{Context, Entity, IntoElement, Render, TestSupportExt, Window, div, prelude::*};
+use gpui_kit::{
+    App, Context, Entity, IntoElement, Render, TestSupportExt, Window, div, prelude::*,
+};
 use remindr_core::domain::BlockId;
 
 use crate::app::WorkspaceModel;
+
+pub fn init(_: &mut App) {}
 
 pub struct BlockEditor {
     model: Entity<WorkspaceModel>,

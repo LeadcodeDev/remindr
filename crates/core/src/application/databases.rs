@@ -125,6 +125,7 @@ pub(crate) fn build(
         Command::CreatePage { .. }
         | Command::InsertBlock { .. }
         | Command::InsertBlockAt { .. }
+        | Command::PasteText { .. }
         | Command::EditText { .. }
         | Command::SplitBlock { .. }
         | Command::MergeWithPrevious { .. }

@@ -6116,6 +6116,7 @@ dependencies = [
  "gpui-kit",
  "remindr-core",
  "remindr-store",
+ "unicode-segmentation",
 ]
 
 [[package]]
