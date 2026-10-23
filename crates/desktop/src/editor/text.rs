@@ -132,6 +132,7 @@ mod tests {
         let marked = Marked {
             block: BlockId::from_uuid(Uuid::from_u128(1)),
             replaced: 5..5,
+            through: None,
             text: "ni".to_owned(),
             cursor: 2..2,
         };

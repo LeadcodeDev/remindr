@@ -191,8 +191,7 @@ impl BlockEditor {
                         .x
                 })
             });
-            let target =
-                goal.and_then(|goal| vertical_target(&frame, &rows, selection.head, goal, down));
+            let target = vertical_target(&frame, &rows, selection.head, goal, down);
             (goal, target)
         };
         if let Some(target) = target {
@@ -216,7 +215,7 @@ impl BlockEditor {
             block: head.block,
             offset: if end { finish } else { start },
         };
-        self.move_head(target, extend, cx);
+        self.move_head(self.valid_point(target, cx), extend, cx);
     }
 
     pub(super) fn select_all(&mut self, cx: &mut Context<Self>) {
@@ -245,11 +244,11 @@ fn vertical_target(
     frame: &Frame,
     rows: &[Row],
     head: TextPoint,
-    goal: Pixels,
+    goal: Option<Pixels>,
     down: bool,
 ) -> Option<TextPoint> {
     let leaf = frame.leaf(head.block);
-    if let Some(leaf) = leaf {
+    if let (Some(leaf), Some(goal)) = (leaf, goal) {
         let caret = leaf.position_for_index(head.offset.min(leaf.len()));
         let line = leaf.line_height();
         let probe = if down {
@@ -275,6 +274,7 @@ fn vertical_target(
         Some(row) => Some(match frame.leaf(row.block) {
             Some(target) => {
                 let bounds = target.bounds();
+                let goal = goal.unwrap_or_else(|| bounds.left());
                 let half = target.line_height() / 2.;
                 let y = if down {
                     bounds.top() + half

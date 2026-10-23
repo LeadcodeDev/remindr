@@ -111,11 +111,11 @@ pub fn handle<E: InteractiveElement>(root: E, cx: &mut Context<BlockEditor>) -> 
     }))
     .on_action(cx.listener(|this, _: &Indent, window, cx| {
         this.commit_marked(window, cx);
-        this.indent(cx);
+        this.indent(window, cx);
     }))
     .on_action(cx.listener(|this, _: &Outdent, window, cx| {
         this.commit_marked(window, cx);
-        this.outdent(cx);
+        this.outdent(window, cx);
     }))
     .on_action(cx.listener(|this, _: &MoveLeft, window, cx| {
         this.commit_marked(window, cx);

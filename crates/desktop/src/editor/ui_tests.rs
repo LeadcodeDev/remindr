@@ -94,10 +94,10 @@ fn typing_on_an_empty_page_creates_the_first_block(cx: &mut TestAppContext) {
     });
     fixture.input(cx, "Hello");
     assert_eq!(fixture.texts(cx), vec!["Hello".to_owned()]);
-    assert_eq!(
-        fixture.caret(cx).map(|point| point.offset),
-        Some("Hello".len())
-    );
+    let caret = fixture.caret(cx).expect("caret");
+    assert_eq!(caret.offset, "Hello".len());
+    assert_eq!(fixture.kind(cx, caret.block), Some(BlockKind::Text));
+    assert_eq!(fixture.children_texts(cx, fixture.page).len(), 1);
 }
 
 #[gpui_kit::test]
@@ -275,23 +275,25 @@ fn tab_and_shift_tab_nest_and_unnest(cx: &mut TestAppContext) {
     let mut doc = Doc::new();
     let first = doc.child(BlockKind::Text, "one");
     let second = doc.child(BlockKind::Text, "two");
+    doc.child(BlockKind::Text, "three");
     let fixture = Fixture::open(cx, &doc);
-    let parent_of = |cx: &mut TestAppContext| {
-        fixture.with(cx, |_, cx| {
-            fixture
-                .model
-                .read(cx)
-                .workspace()
-                .block(second)
-                .map(|block| block.parent)
-        })
-    };
+    let order = || vec!["one".to_owned(), "two".to_owned(), "three".to_owned()];
     fixture.focus_at(cx, at(second, 1));
     fixture.press(cx, "tab");
-    assert_eq!(parent_of(cx), Some(Parent::Block(first)));
+    assert_eq!(fixture.parent(cx, second), Some(Parent::Block(first)));
+    assert_eq!(
+        fixture.children_texts(cx, fixture.page),
+        vec!["one", "three"]
+    );
     assert_eq!(fixture.caret(cx), Some(at(second, 1)));
+    assert!(!fixture.has_notification(cx));
     fixture.press(cx, "shift-tab");
-    assert_eq!(parent_of(cx), Some(Parent::Block(fixture.page)));
+    assert_eq!(
+        fixture.parent(cx, second),
+        Some(Parent::Block(fixture.page))
+    );
+    assert_eq!(fixture.children_texts(cx, fixture.page), order());
+    assert_eq!(fixture.texts(cx), order());
 }
 
 #[gpui_kit::test]
@@ -301,16 +303,56 @@ fn tab_on_a_first_child_changes_nothing(cx: &mut TestAppContext) {
     let fixture = Fixture::open(cx, &doc);
     fixture.focus_at(cx, at(first, 1));
     fixture.press(cx, "tab");
-    let parent = fixture.with(cx, |_, cx| {
-        fixture
-            .model
-            .read(cx)
-            .workspace()
-            .block(first)
-            .map(|block| block.parent)
-    });
-    assert_eq!(parent, Some(Parent::Block(fixture.page)));
+    assert_eq!(fixture.parent(cx, first), Some(Parent::Block(fixture.page)));
     assert_eq!(fixture.caret(cx), Some(at(first, 1)));
+    assert!(!fixture.has_notification(cx));
+}
+
+#[gpui_kit::test]
+fn tab_under_a_heading_changes_nothing(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    doc.child(BlockKind::Heading(HeadingLevel::Two), "Title");
+    let body = doc.child(BlockKind::Text, "body");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.focus_at(cx, at(body, 2));
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.parent(cx, body), Some(Parent::Block(fixture.page)));
+    assert_eq!(fixture.caret(cx), Some(at(body, 2)));
+    assert!(!fixture.has_notification(cx));
+}
+
+#[gpui_kit::test]
+fn tab_under_a_sub_page_link_changes_nothing_and_the_block_stays_visible(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    doc.child(BlockKind::Page { icon: None }, "Sub");
+    let body = doc.child(BlockKind::Text, "body");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.focus_at(cx, at(body, 2));
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.parent(cx, body), Some(Parent::Block(fixture.page)));
+    assert!(!fixture.has_notification(cx));
+    fixture.with(cx, |window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(row_id(body)).is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn a_store_failure_on_tab_is_reported(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let first = doc.child(BlockKind::Text, "one");
+    let second = doc.child(BlockKind::Text, "two");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.focus_at(cx, at(second, 1));
+    fixture.store.fail_next_commit();
+    fixture.press(cx, "tab");
+    assert_eq!(
+        fixture.parent(cx, second),
+        Some(Parent::Block(fixture.page))
+    );
+    assert!(fixture.has_notification(cx));
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.parent(cx, second), Some(Parent::Block(first)));
 }
 
 #[gpui_kit::test]
@@ -498,7 +540,7 @@ fn paste_of_three_lines_creates_two_new_blocks(cx: &mut TestAppContext) {
 fn cut_copies_markdown_and_deletes_the_selection(cx: &mut TestAppContext) {
     let mut doc = Doc::new();
     let title = doc.child(BlockKind::Heading(HeadingLevel::One), "Title");
-    let item = doc.child(BlockKind::BulletedListItem, "item");
+    doc.child(BlockKind::BulletedListItem, "item");
     let fixture = Fixture::open(cx, &doc);
     fixture.focus_at(cx, at(title, 0));
     fixture.press(cx, "secondary-a");
@@ -506,7 +548,6 @@ fn cut_copies_markdown_and_deletes_the_selection(cx: &mut TestAppContext) {
     let copied = cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some("# Title\n- item"));
     assert_eq!(fixture.texts(cx), vec![String::new()]);
-    let _ = item;
 }
 
 fn caret_y(
@@ -668,6 +709,7 @@ fn a_failed_commit_keeps_the_editor_state(cx: &mut TestAppContext) {
     fixture.focus_at(cx, at(block, 1));
     fixture.store.fail_next_commit();
     fixture.input(cx, "x");
+    assert!(fixture.has_notification(cx));
     assert_eq!(fixture.text(cx, block), "a");
     assert_eq!(fixture.caret(cx), Some(at(block, 1)));
     fixture.input(cx, "y");
@@ -817,4 +859,176 @@ fn code_blocks_take_the_caret_and_newlines(cx: &mut TestAppContext) {
         assert!(has_leaf);
         window.render_frame(cx);
     });
+}
+
+#[gpui_kit::test]
+fn select_all_over_a_sub_page_removes_it_with_its_subtree(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let hello = doc.child(BlockKind::Text, "hello");
+    let sub = doc.child(BlockKind::Page { icon: None }, "Sub");
+    let inside = doc.under(sub, BlockKind::Text, "inside");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.focus_at(cx, at(hello, 0));
+    fixture.press(cx, "secondary-a");
+    fixture.press(cx, "backspace");
+    assert!(!fixture.alive(cx, sub));
+    assert!(!fixture.alive(cx, inside));
+    assert!(fixture.alive(cx, hello));
+    assert_eq!(fixture.text(cx, sub), "Sub");
+    assert_eq!(fixture.texts(cx), vec![String::new()]);
+}
+
+#[gpui_kit::test]
+fn a_selection_from_a_sub_page_into_a_text_keeps_the_tail(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let sub = doc.child(BlockKind::Page { icon: None }, "Sub");
+    let text = doc.child(BlockKind::Text, "text");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.select(cx, at(sub, 0), at(text, 2));
+    fixture.press(cx, "backspace");
+    assert!(!fixture.alive(cx, sub));
+    assert_eq!(fixture.text(cx, sub), "Sub");
+    assert_eq!(fixture.texts(cx), vec!["xt".to_owned()]);
+    assert_eq!(fixture.caret(cx), Some(at(text, 0)));
+}
+
+#[gpui_kit::test]
+fn an_end_point_past_a_page_row_is_normalised_before_the_delete(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let hello = doc.child(BlockKind::Text, "hello");
+    let sub = doc.child(BlockKind::Page { icon: None }, "Sub");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.select(cx, at(hello, 2), at(sub, 3));
+    fixture.press(cx, "backspace");
+    assert_eq!(fixture.text(cx, hello), "he");
+    assert!(!fixture.alive(cx, sub));
+    assert_eq!(fixture.text(cx, sub), "Sub");
+}
+
+#[gpui_kit::test]
+fn line_edges_on_an_atomic_row_stay_at_offset_zero(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let sub = doc.child(BlockKind::Page { icon: None }, "Sub");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.click_block(cx, sub);
+    fixture.press(cx, "shift-end");
+    let selection = fixture.selection(cx).expect("selection");
+    assert_eq!(selection.head, at(sub, 0));
+    fixture.press(cx, "end");
+    assert_eq!(fixture.caret(cx), Some(at(sub, 0)));
+}
+
+#[gpui_kit::test]
+fn deleting_through_a_collapsed_toggle_removes_its_children(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let first = doc.child(BlockKind::Text, "A");
+    let toggle = doc.child(BlockKind::Toggle, "T");
+    let child = doc.under(toggle, BlockKind::Text, "C");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.focus_at(cx, at(first, 0));
+    fixture.press(cx, "secondary-a");
+    fixture.press(cx, "backspace");
+    assert!(!fixture.alive(cx, toggle));
+    assert!(!fixture.alive(cx, child));
+    assert_eq!(fixture.texts(cx), vec![String::new()]);
+}
+
+#[gpui_kit::test]
+fn deleting_part_of_a_collapsed_toggle_title_keeps_its_children(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let toggle = doc.child(BlockKind::Toggle, "Hello");
+    let child = doc.under(toggle, BlockKind::Text, "C");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.select(cx, at(toggle, 2), at(toggle, 5));
+    fixture.press(cx, "backspace");
+    assert_eq!(fixture.text(cx, toggle), "He");
+    assert!(fixture.alive(cx, child));
+}
+
+#[gpui_kit::test]
+fn vertical_moves_leave_an_atomic_row(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let above = doc.child(BlockKind::Text, "above");
+    let divider = doc.child(BlockKind::Divider, "");
+    let below = doc.child(BlockKind::Text, "below");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.click_block(cx, divider);
+    fixture.press(cx, "down");
+    assert_eq!(fixture.caret(cx).map(|point| point.block), Some(below));
+    fixture.click_block(cx, divider);
+    fixture.press(cx, "up");
+    assert_eq!(fixture.caret(cx).map(|point| point.block), Some(above));
+}
+
+#[gpui_kit::test]
+fn composition_over_a_selection_waits_for_the_commit(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let block = doc.child(BlockKind::Text, "hello world");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.select(cx, at(block, 3), at(block, 8));
+    fixture.with(cx, |window, cx| {
+        let bounds = window.find("block-editor").bounds();
+        let mut input = TestInput::new(
+            ElementInputHandler::new(bounds, fixture.editor.clone()),
+            window,
+        );
+        input.compose_text(None, "x", Some(1..1), cx);
+        assert_eq!(input.marked_text_range(cx), Some(3..4));
+    });
+    assert_eq!(fixture.text(cx, block), "hello world");
+    fixture.with(cx, |window, cx| {
+        let bounds = window.find("block-editor").bounds();
+        let mut input = TestInput::new(
+            ElementInputHandler::new(bounds, fixture.editor.clone()),
+            window,
+        );
+        input.compose_text(None, "", None, cx);
+        assert_eq!(input.marked_text_range(cx), None);
+    });
+    assert_eq!(fixture.text(cx, block), "hello world");
+    let kept = fixture.selection(cx).expect("selection");
+    assert_eq!((kept.anchor, kept.head), (at(block, 3), at(block, 8)));
+    fixture.with(cx, |window, cx| {
+        let bounds = window.find("block-editor").bounds();
+        let mut input = TestInput::new(
+            ElementInputHandler::new(bounds, fixture.editor.clone()),
+            window,
+        );
+        input.compose_text(None, "x", Some(1..1), cx);
+        input.commit_text("x", cx);
+    });
+    assert_eq!(fixture.text(cx, block), "helxrld");
+    assert_eq!(fixture.caret(cx), Some(at(block, 4)));
+}
+
+#[gpui_kit::test]
+fn composition_over_a_multi_block_selection_deletes_at_the_commit(cx: &mut TestAppContext) {
+    let mut doc = Doc::new();
+    let first = doc.child(BlockKind::Text, "Hello");
+    let second = doc.child(BlockKind::Text, "world");
+    let fixture = Fixture::open(cx, &doc);
+    fixture.select(cx, at(first, 2), at(second, 3));
+    fixture.with(cx, |window, cx| {
+        let bounds = window.find("block-editor").bounds();
+        let mut input = TestInput::new(
+            ElementInputHandler::new(bounds, fixture.editor.clone()),
+            window,
+        );
+        input.compose_text(None, "x", Some(1..1), cx);
+        assert_eq!(input.marked_text_range(cx), Some(2..3));
+    });
+    assert_eq!(
+        fixture.texts(cx),
+        vec!["Hello".to_owned(), "world".to_owned()]
+    );
+    fixture.with(cx, |window, cx| {
+        let bounds = window.find("block-editor").bounds();
+        let mut input = TestInput::new(
+            ElementInputHandler::new(bounds, fixture.editor.clone()),
+            window,
+        );
+        input.commit_text("x", cx);
+    });
+    assert_eq!(fixture.texts(cx), vec!["Hexld".to_owned()]);
+    assert_eq!(fixture.caret(cx), Some(at(first, 3)));
 }

@@ -36,7 +36,7 @@ use caret::{Blink, Marked, Selection, floor_boundary};
 use element::EditorRoot;
 use frame::{CARET_WIDTH, Frame, leaf_key};
 use palette::Palette;
-use render::{RowBounds, RowEnv, RowSpec};
+use render::{RowBounds, RowEnv, RowKind, RowSpec, icon_of};
 use rows::{Expansion, Extent, Row, extent, position, rows};
 
 const KEY_CONTEXT: &str = "BlockEditor";
@@ -239,21 +239,21 @@ impl BlockEditor {
         }
     }
 
+    fn valid_point(&self, point: TextPoint, cx: &App) -> TextPoint {
+        let offset = match self.block(point.block, cx) {
+            Some(block) if is_atomic_row(&block.kind) => 0,
+            Some(block) => floor_boundary(&block.text.to_plain(), point.offset),
+            None => 0,
+        };
+        TextPoint {
+            block: point.block,
+            offset,
+        }
+    }
+
     fn clamp_point(&self, point: TextPoint, rows: &[Row], cx: &App) -> Option<TextPoint> {
         if position(rows, point.block).is_some() {
-            let plain = self.plain_of(point.block, cx).unwrap_or_default();
-            let atomic = self
-                .kind_of(point.block, cx)
-                .is_none_or(|kind| is_atomic_row(&kind));
-            let offset = if atomic {
-                0
-            } else {
-                floor_boundary(&plain, point.offset)
-            };
-            return Some(TextPoint {
-                block: point.block,
-                offset,
-            });
+            return Some(self.valid_point(point, cx));
         }
         let old = self.order.iter().position(|block| *block == point.block)?;
         let alive = |block: &&BlockId| position(rows, **block).is_some();
@@ -308,6 +308,7 @@ impl BlockEditor {
         let rows = self.visible_rows(cx);
         let range = self
             .selection
+            .filter(|_| self.marked.is_none())
             .and_then(|selection| extent(&rows, selection.anchor, selection.head));
         let mut specs = Vec::with_capacity(rows.len());
         let mut decorations: HashMap<u64, Vec<(Range<usize>, Hsla)>> = HashMap::new();
@@ -326,7 +327,8 @@ impl BlockEditor {
             }
             specs.push(RowSpec {
                 row: *row,
-                kind: block.kind.clone(),
+                kind: RowKind::of(&block.kind),
+                icon: icon_of(&block.kind),
                 node: self.node_of(block, palette, key),
                 title: title_of(block),
                 selected: atomic && inside,
@@ -373,7 +375,7 @@ impl BlockEditor {
     }
 
     fn embed(&mut self, spec: &RowSpec, window: &mut Window, cx: &mut App) -> Option<AnyView> {
-        let BlockKind::DatabaseView { database } = &spec.kind else {
+        let RowKind::Database(database) = spec.kind else {
             return None;
         };
         let block = spec.row.block;
@@ -383,7 +385,6 @@ impl BlockEditor {
         if !cx.has_global::<EmbedRegistry>() {
             return None;
         }
-        let database = *database;
         let view = cx.update_global::<EmbedRegistry, _>(|registry, cx| {
             registry.build(block, database, window, cx)
         })?;

@@ -82,11 +82,12 @@ mod fixture {
         WindowBounds, WindowOptions, px, size,
     };
     use remindr_core::application::{Session, TextPoint};
-    use remindr_core::domain::BlockId;
+    use remindr_core::domain::{BlockId, BlockKind, Parent};
     use remindr_core::testing::MemoryStore;
 
     use super::Doc;
     use crate::app::{AppStore, SystemClock, WorkspaceModel};
+    use crate::editor::caret::Selection;
     use crate::editor::{self, BlockEditor};
 
     pub struct Fixture {
@@ -163,6 +164,68 @@ mod fixture {
                     .map(|block| block.text.to_plain())
                     .collect()
             })
+        }
+
+        pub fn alive(&self, cx: &mut TestAppContext, block: BlockId) -> bool {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .block(block)
+                    .is_some_and(|found| found.alive)
+            })
+        }
+
+        pub fn kind(&self, cx: &mut TestAppContext, block: BlockId) -> Option<BlockKind> {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .block(block)
+                    .map(|found| found.kind.clone())
+            })
+        }
+
+        pub fn parent(&self, cx: &mut TestAppContext, block: BlockId) -> Option<Parent> {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .block(block)
+                    .map(|found| found.parent)
+            })
+        }
+
+        pub fn children_texts(&self, cx: &mut TestAppContext, parent: BlockId) -> Vec<String> {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .children(Parent::Block(parent))
+                    .map(|found| found.text.to_plain())
+                    .collect()
+            })
+        }
+
+        pub fn has_notification(&self, cx: &mut TestAppContext) -> bool {
+            self.with(cx, |window, cx| {
+                window.render_frame(cx);
+                window.try_find("notification").is_some()
+            })
+        }
+
+        pub fn select(&self, cx: &mut TestAppContext, anchor: TextPoint, head: TextPoint) {
+            self.with(cx, |window, cx| {
+                self.editor.update(cx, |editor, cx| {
+                    window.focus(&editor.focus, cx);
+                    editor.set_selection(Some(Selection { anchor, head }), cx);
+                });
+                window.render_frame(cx);
+            });
+        }
+
+        pub fn selection(&self, cx: &mut TestAppContext) -> Option<Selection> {
+            self.with(cx, |_, cx| self.editor.read(cx).selection())
         }
 
         pub fn caret(&self, cx: &mut TestAppContext) -> Option<TextPoint> {

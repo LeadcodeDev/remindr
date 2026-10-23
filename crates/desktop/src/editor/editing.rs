@@ -30,11 +30,20 @@ impl BlockEditor {
     pub(super) fn dispatch_quiet(
         &mut self,
         command: Command,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Changes> {
-        let changes = self.execute(command, cx).ok()?;
-        self.settle(&changes, cx);
-        Some(changes)
+        match self.execute(command, cx) {
+            Ok(changes) => {
+                self.settle(&changes, cx);
+                Some(changes)
+            }
+            Err(SessionError::Domain(_)) => None,
+            Err(error @ SessionError::Store(_)) => {
+                window.push_notification(Notification::error(error.to_string()), cx);
+                None
+            }
+        }
     }
 
     fn execute(
@@ -127,19 +136,57 @@ impl BlockEditor {
         self.dispatch(command, window, cx)?.caret
     }
 
+    pub(super) fn deletion_span(
+        &self,
+        selection: Selection,
+        cx: &Context<Self>,
+    ) -> Option<(TextPoint, TextPoint)> {
+        let rows = self.visible_rows(cx);
+        let anchor = self.valid_point(selection.anchor, cx);
+        let head = self.valid_point(selection.head, cx);
+        let span = extent(&rows, anchor, head)?;
+        let end = if span.start.block == span.end.block {
+            span.end
+        } else {
+            self.with_hidden_descendants(span.end, cx)
+        };
+        Some((span.start, end))
+    }
+
+    fn with_hidden_descendants(&self, end: TextPoint, cx: &Context<Self>) -> TextPoint {
+        let collapsed = matches!(self.kind_of(end.block, cx), Some(BlockKind::Toggle))
+            && !self.expanded.contains(&end.block)
+            && end.offset == self.text_len(end.block, cx);
+        if !collapsed {
+            return end;
+        }
+        let flow = rows(self.model.read(cx).workspace(), self.page, Expansion::All);
+        let Some(index) = position(&flow, end.block) else {
+            return end;
+        };
+        let depth = flow[index].depth;
+        let last = flow[index + 1..]
+            .iter()
+            .take_while(|row| row.depth > depth)
+            .last();
+        match last {
+            Some(row) => TextPoint {
+                block: row.block,
+                offset: self.text_len(row.block, cx),
+            },
+            None => end,
+        }
+    }
+
     pub(super) fn delete_selection(
         &mut self,
         selection: Selection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<TextPoint> {
-        let rows = self.visible_rows(cx);
-        let span = extent(&rows, selection.anchor, selection.head)?;
-        let command = Command::DeleteRange {
-            start: span.start,
-            end: span.end,
-        };
-        self.dispatch(command, window, cx)?.caret
+        let (start, end) = self.deletion_span(selection, cx)?;
+        self.dispatch(Command::DeleteRange { start, end }, window, cx)?
+            .caret
     }
 
     pub(super) fn backspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -299,20 +346,23 @@ impl BlockEditor {
         self.dispatch(command, window, cx);
     }
 
-    pub(super) fn indent(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn indent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(selection) = self.selection else {
             return;
         };
         let block = selection.head.block;
-        if self.dispatch_quiet(Command::Indent { block }, cx).is_some() {
+        if self
+            .dispatch_quiet(Command::Indent { block }, window, cx)
+            .is_some()
+        {
             self.open_parent_toggle(block, cx);
         }
     }
 
-    pub(super) fn outdent(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn outdent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(selection) = self.selection {
             let block = selection.head.block;
-            self.dispatch_quiet(Command::Outdent { block }, cx);
+            self.dispatch_quiet(Command::Outdent { block }, window, cx);
         }
     }
 

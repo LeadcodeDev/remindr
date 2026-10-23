@@ -7,7 +7,7 @@ use gpui_kit::{
     AnyElement, AnyView, App, Bounds, Entity, MouseButton, Pixels, SharedString, TestSupportExt,
     Window, canvas, div, prelude::*, px,
 };
-use remindr_core::domain::{BlockId, BlockKind};
+use remindr_core::domain::{BlockId, BlockKind, DatabaseId};
 
 use super::frame::leaf_key;
 use super::palette::Palette;
@@ -20,9 +20,49 @@ pub const LINE: Pixels = px(26.);
 
 pub type RowBounds = Rc<RefCell<Vec<(BlockId, Bounds<Pixels>)>>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowKind {
+    Text,
+    Bulleted,
+    Numbered,
+    ToDo { checked: bool },
+    Toggle,
+    Quote,
+    Callout,
+    Divider,
+    Page,
+    Database(DatabaseId),
+}
+
+impl RowKind {
+    pub fn of(kind: &BlockKind) -> Self {
+        match kind {
+            BlockKind::Text | BlockKind::Heading(_) | BlockKind::Code { .. } => Self::Text,
+            BlockKind::BulletedListItem => Self::Bulleted,
+            BlockKind::NumberedListItem => Self::Numbered,
+            BlockKind::ToDo { checked } => Self::ToDo { checked: *checked },
+            BlockKind::Toggle => Self::Toggle,
+            BlockKind::Quote => Self::Quote,
+            BlockKind::Callout { .. } => Self::Callout,
+            BlockKind::Divider => Self::Divider,
+            BlockKind::Page { .. } => Self::Page,
+            BlockKind::DatabaseView { database } => Self::Database(*database),
+        }
+    }
+}
+
+pub fn icon_of(kind: &BlockKind) -> Option<SharedString> {
+    match kind {
+        BlockKind::Callout { icon } => Some(SharedString::from(icon.as_str().to_owned())),
+        BlockKind::Page { icon: Some(icon) } => Some(SharedString::from(icon.as_str().to_owned())),
+        _ => None,
+    }
+}
+
 pub struct RowSpec {
     pub row: Row,
-    pub kind: BlockKind,
+    pub kind: RowKind,
+    pub icon: Option<SharedString>,
     pub node: Option<BlockNode>,
     pub title: SharedString,
     pub selected: bool,
@@ -57,7 +97,7 @@ pub fn row(
 ) -> AnyElement {
     let block = spec.row.block;
     let palette = env.palette;
-    let boxed = matches!(spec.kind, BlockKind::Callout { .. });
+    let boxed = matches!(spec.kind, RowKind::Callout);
     let sink = env.sink.clone();
     let prefix = prefix(&spec, env);
     let content = content(&spec, embed, env, window, cx);
@@ -112,17 +152,20 @@ fn marker(label: impl Into<SharedString>) -> gpui_kit::Div {
 
 fn prefix(spec: &RowSpec, env: &RowEnv) -> Option<AnyElement> {
     let block = spec.row.block;
-    match &spec.kind {
-        BlockKind::BulletedListItem => Some(marker("•").into_any_element()),
-        BlockKind::NumberedListItem => Some(
+    match spec.kind {
+        RowKind::Bulleted => Some(marker("•").into_any_element()),
+        RowKind::Numbered => Some(
             marker(format!("{}.", spec.row.number.unwrap_or(1)))
                 .justify_end()
                 .pr(px(6.))
                 .into_any_element(),
         ),
-        BlockKind::Callout { icon } => Some(marker(icon.as_str().to_owned()).into_any_element()),
-        BlockKind::ToDo { checked } => Some(checkbox(block, *checked, env)),
-        BlockKind::Toggle => Some(chevron(block, spec.open, env)),
+        RowKind::Callout => spec
+            .icon
+            .clone()
+            .map(|icon| marker(icon).into_any_element()),
+        RowKind::ToDo { checked } => Some(checkbox(block, checked, env)),
+        RowKind::Toggle => Some(chevron(block, spec.open, env)),
         _ => None,
     }
 }
@@ -204,17 +247,17 @@ fn content(
 ) -> AnyElement {
     let palette = env.palette;
     let block = spec.row.block;
-    match &spec.kind {
-        BlockKind::Divider => div()
+    match spec.kind {
+        RowKind::Divider => div()
             .flex_1()
             .h(LINE)
             .flex()
             .items_center()
             .child(div().w_full().h(px(1.)).bg(palette.border))
             .into_any_element(),
-        BlockKind::Page { icon } => {
-            let glyph = match icon {
-                Some(icon) => div().child(icon.as_str().to_owned()).into_any_element(),
+        RowKind::Page => {
+            let glyph = match &spec.icon {
+                Some(icon) => div().child(icon.clone()).into_any_element(),
                 None => Icon::new(IconName::File)
                     .size_4()
                     .text_color(palette.muted_foreground)
@@ -237,7 +280,7 @@ fn content(
                 })
                 .into_any_element()
         }
-        BlockKind::DatabaseView { .. } => match embed {
+        RowKind::Database(_) => match embed {
             Some(view) => div()
                 .flex_1()
                 .min_w_0()
@@ -260,8 +303,8 @@ fn content(
                 }
                 None => div().into_any_element(),
             };
-            let struck = matches!(kind, BlockKind::ToDo { checked: true });
-            let quoted = matches!(kind, BlockKind::Quote);
+            let struck = matches!(kind, RowKind::ToDo { checked: true });
+            let quoted = matches!(kind, RowKind::Quote);
             div()
                 .flex_1()
                 .min_w_0()

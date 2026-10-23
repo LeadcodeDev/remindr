@@ -14,6 +14,9 @@ use super::{BlockEditor, is_atomic_row};
 
 impl BlockEditor {
     fn ime_block(&self, cx: &Context<Self>) -> Option<BlockId> {
+        if let Some(marked) = &self.marked {
+            return Some(marked.block);
+        }
         let block = self.selection?.head.block;
         let kind = self.kind_of(block, cx)?;
         (!is_atomic_row(&kind)).then_some(block)
@@ -33,8 +36,68 @@ impl BlockEditor {
         let Some(marked) = self.marked.take() else {
             return;
         };
-        self.replace_in_block(marked.block, marked.replaced, &marked.text, window, cx);
+        let text = marked.text.clone();
+        self.commit_composition(marked, &text, window, cx);
         cx.notify();
+    }
+
+    fn commit_composition(
+        &mut self,
+        marked: Marked,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(end) = marked.through else {
+            self.replace_in_block(marked.block, marked.replaced, text, window, cx);
+            return;
+        };
+        let start = TextPoint {
+            block: marked.block,
+            offset: marked.replaced.start,
+        };
+        let Some(at) = self
+            .dispatch(Command::DeleteRange { start, end }, window, cx)
+            .and_then(|changes| changes.caret)
+        else {
+            return;
+        };
+        if text.is_empty() {
+            self.set_caret(at, cx);
+        } else {
+            self.insert_at(at, text, window, cx);
+        }
+    }
+
+    fn composition_target(
+        &mut self,
+        range: Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(BlockId, Range<usize>, Option<TextPoint>)> {
+        let Some(selection) = self.selection.filter(|selection| !selection.is_collapsed()) else {
+            let at = self.insertion_point(window, cx)?;
+            let replaced = range
+                .and_then(|range| self.utf16_range(at.block, range, cx))
+                .unwrap_or(at.offset..at.offset);
+            return Some((at.block, replaced, None));
+        };
+        let (start, end) = self.deletion_span(selection, cx)?;
+        let atomic = self
+            .kind_of(start.block, cx)
+            .is_none_or(|kind| is_atomic_row(&kind));
+        if atomic {
+            let at = self.delete_selection(selection, window, cx)?;
+            return Some((at.block, at.offset..at.offset, None));
+        }
+        if start.block == end.block {
+            let replaced = range
+                .and_then(|range| self.utf16_range(start.block, range, cx))
+                .unwrap_or(start.offset..end.offset);
+            return Some((start.block, replaced, None));
+        }
+        let length = self.text_len(start.block, cx);
+        Some((start.block, start.offset..length, Some(end)))
     }
 
     fn replace_in_block(
@@ -159,7 +222,7 @@ impl EntityInputHandler for BlockEditor {
         cx: &mut Context<Self>,
     ) {
         if let Some(marked) = self.marked.take() {
-            self.replace_in_block(marked.block, marked.replaced, text, window, cx);
+            self.commit_composition(marked, text, window, cx);
             return;
         }
         let target = range.and_then(|range| {
@@ -185,17 +248,12 @@ impl EntityInputHandler for BlockEditor {
             cx.notify();
             return;
         }
-        let (block, replaced) = match &self.marked {
-            Some(marked) => (marked.block, marked.replaced.clone()),
-            None => {
-                let Some(at) = self.insertion_point(window, cx) else {
-                    return;
-                };
-                let replaced = range
-                    .and_then(|range| self.utf16_range(at.block, range, cx))
-                    .unwrap_or(at.offset..at.offset);
-                (at.block, replaced)
-            }
+        let target = match &self.marked {
+            Some(marked) => Some((marked.block, marked.replaced.clone(), marked.through)),
+            None => self.composition_target(range, window, cx),
+        };
+        let Some((block, replaced, through)) = target else {
+            return;
         };
         let atomic = self
             .kind_of(block, cx)
@@ -207,19 +265,27 @@ impl EntityInputHandler for BlockEditor {
             utf16_to_byte(new_text, selected.start)..utf16_to_byte(new_text, selected.end)
         });
         let start = replaced.start;
+        let keeps_selection = self
+            .selection
+            .is_some_and(|selection| !selection.is_collapsed());
         self.marked = Some(Marked {
             block,
             replaced,
+            through,
             text: new_text.to_owned(),
             cursor,
         });
-        self.set_caret(
-            TextPoint {
-                block,
-                offset: start,
-            },
-            cx,
-        );
+        if keeps_selection {
+            cx.notify();
+        } else {
+            self.set_caret(
+                TextPoint {
+                    block,
+                    offset: start,
+                },
+                cx,
+            );
+        }
     }
 
     fn bounds_for_range(

@@ -31,6 +31,7 @@ impl Selection {
 pub struct Marked {
     pub block: BlockId,
     pub replaced: Range<usize>,
+    pub through: Option<TextPoint>,
     pub text: String,
     pub cursor: Range<usize>,
 }
@@ -147,21 +148,14 @@ pub fn grapheme_after(text: &str, offset: usize) -> Option<usize> {
 pub fn word_before(text: &str, offset: usize) -> usize {
     let offset = floor_boundary(text, offset);
     let mut target = 0;
-    let mut seen_word = false;
+    let mut in_word = false;
     for (start, segment) in text[..offset].split_word_bound_indices().rev() {
-        let blank = segment.chars().all(char::is_whitespace);
-        if !blank {
-            seen_word = true;
-        }
-        if seen_word && blank {
-            target = start + segment.len();
+        if is_word(segment) {
+            in_word = true;
+            target = start;
+        } else if in_word {
             break;
         }
-        if seen_word && !is_word(segment) {
-            target = start + segment.len();
-            break;
-        }
-        target = start;
     }
     target
 }
@@ -169,15 +163,13 @@ pub fn word_before(text: &str, offset: usize) -> usize {
 pub fn word_after(text: &str, offset: usize) -> usize {
     let offset = floor_boundary(text, offset);
     let mut target = text.len();
-    let mut seen_word = false;
+    let mut in_word = false;
     for (start, segment) in text[offset..].split_word_bound_indices() {
-        let blank = segment.chars().all(char::is_whitespace);
-        if seen_word && (blank || !is_word(segment)) {
+        if is_word(segment) {
+            in_word = true;
+        } else if in_word {
             target = offset + start;
             break;
-        }
-        if !blank {
-            seen_word = true;
         }
     }
     target
@@ -250,6 +242,27 @@ mod tests {
     }
 
     #[test]
+    fn word_before_moves_past_trailing_punctuation() {
+        assert_eq!(word_before("Hello!", 6), 0);
+        assert_eq!(word_before("Hello world.", 12), 6);
+        assert_eq!(word_before("foo, bar", 4), 0);
+        assert_eq!(word_before("(foo)", 5), 1);
+        assert_eq!(word_before("...", 3), 0);
+        assert_eq!(word_before("hello", 0), 0);
+    }
+
+    #[test]
+    fn word_after_moves_past_leading_punctuation() {
+        assert_eq!(word_after("Hello!", 0), 5);
+        assert_eq!(word_after("Hello!", 5), 6);
+        assert_eq!(word_after("foo, bar", 3), 8);
+        assert_eq!(word_after("(foo)", 0), 4);
+        assert_eq!(word_after("(foo)", 4), 5);
+        assert_eq!(word_after("...", 0), 3);
+        assert_eq!(word_after("hello", 5), 5);
+    }
+
+    #[test]
     fn utf16_offsets_round_trip() {
         let text = "a😀b";
         assert_eq!(byte_to_utf16(text, 5), 3);
@@ -262,6 +275,7 @@ mod tests {
         let marked = Marked {
             block: BlockId::from_uuid(Uuid::from_u128(1)),
             replaced: 2..4,
+            through: None,
             text: "abcdef".to_owned(),
             cursor: 6..6,
         };

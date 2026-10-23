@@ -140,16 +140,16 @@ mod tests {
         let mut doc = Doc::new();
         let title = doc.child(BlockKind::Heading(HeadingLevel::One), "Title");
         let item = doc.child(BlockKind::BulletedListItem, "item");
-        let nested = doc.under(item, BlockKind::ToDo { checked: true }, "done");
-        let numbered = doc.child(BlockKind::NumberedListItem, "first");
-        let quote = doc.child(BlockKind::Quote, "wise");
-        let code = doc.child(
+        doc.under(item, BlockKind::ToDo { checked: true }, "done");
+        doc.child(BlockKind::NumberedListItem, "first");
+        doc.child(BlockKind::Quote, "wise");
+        doc.child(
             BlockKind::Code {
                 language: CodeLanguage::new("rust"),
             },
             "let x = 1;",
         );
-        let rule = doc.child(BlockKind::Divider, "");
+        doc.child(BlockKind::Divider, "");
         let tail = doc.child(BlockKind::Text, "tail");
         let workspace = doc.workspace();
         let found = rows(&workspace, doc.page(), Expansion::All);
@@ -169,7 +169,6 @@ mod tests {
             markdown,
             "# Title\n- item\n  - [x] done\n1. first\n> wise\n```rust\nlet x = 1;\n```\n---\nta"
         );
-        let _ = (nested, numbered, quote, code, rule);
     }
 
     #[test]

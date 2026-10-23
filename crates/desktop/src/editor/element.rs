@@ -182,18 +182,21 @@ impl EditorRoot {
     fn paint_caret(&self, window: &mut Window, cx: &mut App) {
         self.follow_focus(window, cx);
         let state = self.editor.read(cx);
-        let Some(selection) = state.selection.filter(|selection| selection.is_collapsed()) else {
+        let target = match (&state.marked, state.selection) {
+            (Some(marked), _) => Some((marked.block, marked.display_cursor().end)),
+            (None, Some(selection)) if selection.is_collapsed() => {
+                Some((selection.head.block, selection.head.offset))
+            }
+            _ => None,
+        };
+        let Some((block, offset)) = target else {
             return;
         };
         if !state.focus.is_focused(window) || !state.blink.read(cx).visible() {
             return;
         }
-        let offset = match &state.marked {
-            Some(marked) if marked.block == selection.head.block => marked.display_cursor().end,
-            _ => selection.head.offset,
-        };
         let frame = state.frame.borrow();
-        if let Some(caret) = frame.caret_bounds(selection.head.block, offset, CARET_WIDTH) {
+        if let Some(caret) = frame.caret_bounds(block, offset, CARET_WIDTH) {
             window.paint_quad(fill(caret, self.palette.caret));
         }
     }
