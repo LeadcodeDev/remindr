@@ -71,6 +71,16 @@ impl BlockEditor {
             return;
         };
         let block = head.block;
+        let holds_children = match &trigger {
+            Trigger::Kind(kind) => kind.accepts_children(),
+            Trigger::Divider => false,
+        };
+        if !holds_children && self.has_children(block, cx) {
+            return;
+        }
+        if trigger == Trigger::Divider && plain.len() != head.offset {
+            return;
+        }
         match trigger {
             Trigger::Kind(kind) => {
                 let start = TextPoint { block, offset: 0 };
@@ -85,11 +95,7 @@ impl BlockEditor {
                     kind: BlockKind::Divider,
                 };
                 if self.dispatch(divider, window, cx).is_some() {
-                    let next = Command::InsertBlock {
-                        after: block,
-                        kind: BlockKind::Text,
-                    };
-                    self.dispatch(next, window, cx);
+                    self.continue_after_divider(block, window, cx);
                 }
             }
         }
@@ -310,7 +316,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_shortcut_does_not_open_the_slash_menu_or_misfire_on_slash(cx: &mut TestAppContext) {
+    fn a_lone_slash_opens_the_menu_and_stays_in_the_text(cx: &mut TestAppContext) {
         let (fixture, block) = shortcut(cx, "/");
         assert!(fixture.shown(cx, "slash-menu"));
         assert_eq!(fixture.text(cx, block), "/");
@@ -328,5 +334,72 @@ mod tests {
         );
         assert!(!fixture.shown(cx, "slash-menu"));
         assert_eq!(fixture.text(cx, block), "/");
+    }
+
+    #[gpui_kit::test]
+    fn three_dashes_in_front_of_text_do_not_erase_it(cx: &mut TestAppContext) {
+        let (fixture, block) = typed(cx, BlockKind::Text, "foo", "---");
+        assert_eq!(fixture.kind(cx, block), Some(BlockKind::Text));
+        assert_eq!(fixture.text(cx, block), "---foo");
+        assert_eq!(fixture.texts(cx).len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn three_dashes_after_text_do_not_erase_it(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "foo");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 3));
+        fixture.input(cx, "---");
+        assert_eq!(fixture.kind(cx, block), Some(BlockKind::Text));
+        assert_eq!(fixture.text(cx, block), "foo---");
+    }
+
+    #[gpui_kit::test]
+    fn three_dashes_reuse_the_following_block(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "");
+        let next = doc.child(BlockKind::Text, "next");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 0));
+        fixture.input(cx, "---");
+        assert_eq!(fixture.kind(cx, block), Some(BlockKind::Divider));
+        assert_eq!(fixture.children_ids(cx, fixture.page), vec![block, next]);
+        assert_eq!(fixture.caret(cx), Some(at(next, 0)));
+        assert_eq!(fixture.text(cx, next), "next");
+    }
+
+    fn with_child(cx: &mut TestAppContext, typing: &str) -> (Fixture, BlockId, BlockId) {
+        let mut doc = Doc::new();
+        let parent = doc.child(BlockKind::Text, "");
+        let child = doc.under(parent, BlockKind::Text, "kid");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(parent, 0));
+        fixture.input(cx, typing);
+        (fixture, parent, child)
+    }
+
+    #[gpui_kit::test]
+    fn kinds_that_cannot_hold_children_do_not_trigger_on_a_block_with_children(
+        cx: &mut TestAppContext,
+    ) {
+        for typing in ["# ", "## ", "### ", "```", "---"] {
+            let (fixture, parent, child) = with_child(cx, typing);
+            assert_eq!(fixture.kind(cx, parent), Some(BlockKind::Text), "{typing}");
+            assert_eq!(fixture.text(cx, parent), typing);
+            assert!(fixture.alive(cx, child));
+            assert_eq!(fixture.children_ids(cx, parent), vec![child]);
+            assert!(!fixture.has_notification(cx), "{typing}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn kinds_that_hold_children_still_trigger_on_a_block_with_children(cx: &mut TestAppContext) {
+        let (fixture, parent, child) = with_child(cx, "- ");
+        assert_eq!(fixture.kind(cx, parent), Some(BlockKind::BulletedListItem));
+        assert_eq!(fixture.text(cx, parent), "");
+        assert_eq!(fixture.children_ids(cx, parent), vec![child]);
+        let (fixture, parent, _) = with_child(cx, "> ");
+        assert_eq!(fixture.kind(cx, parent), Some(BlockKind::Toggle));
     }
 }

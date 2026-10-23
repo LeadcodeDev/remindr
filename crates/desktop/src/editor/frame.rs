@@ -86,6 +86,13 @@ impl Frame {
         Some(Bounds::new(origin, size(px(1.), leaf.line_height())))
     }
 
+    pub fn row_box(&self, block: BlockId) -> Option<Bounds<Pixels>> {
+        self.rows
+            .iter()
+            .find(|(candidate, _)| *candidate == block)
+            .map(|(_, bounds)| *bounds)
+    }
+
     pub fn line_edges(&self, block: BlockId, offset: usize, text: &str) -> Option<(usize, usize)> {
         let leaf = self.leaves.get(&block)?;
         let line = leaf.position_for_index(offset.min(leaf.len())).y;

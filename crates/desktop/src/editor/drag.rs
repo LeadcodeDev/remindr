@@ -1,5 +1,5 @@
 use gpui_kit::{
-    App, Context, DragMoveEvent, Hsla, InteractiveElement, IntoElement, Pixels, Render,
+    App, Bounds, Context, DragMoveEvent, Hsla, InteractiveElement, IntoElement, Pixels, Render,
     SharedString, Window, div, prelude::*, px,
 };
 use remindr_core::application::{Command, DropTarget};
@@ -198,53 +198,70 @@ impl BlockEditor {
         }
         let workspace = self.model.read(cx).workspace();
         let flow = self.visible_rows(cx);
-        let frame = self.frame.borrow();
-        let mut rows = Vec::new();
-        let mut areas = Vec::new();
-        for (block, area) in frame.rows() {
-            let Some(index) = position(&flow, *block) else {
-                continue;
-            };
-            let Some(found) = workspace.block(*block) else {
-                continue;
-            };
-            rows.push(DropRow {
-                block: *block,
-                parent: found.parent,
-                depth: flow[index].depth,
-                accepts_children: found.kind.accepts_children()
-                    && !matches!(found.kind, BlockKind::Page { .. }),
-            });
-            areas.push(*area);
+        let rows: Vec<DropRow> = flow
+            .iter()
+            .filter_map(|row| {
+                let found = workspace.block(row.block)?;
+                Some(DropRow {
+                    block: row.block,
+                    parent: found.parent,
+                    depth: row.depth,
+                    accepts_children: found.kind.accepts_children()
+                        && !matches!(found.kind, BlockKind::Page { .. }),
+                })
+            })
+            .collect();
+        if rows.len() != flow.len() {
+            return None;
         }
-        let first = rows.first()?;
-        let over_itself = rows.iter().zip(&areas).any(|(row, area)| {
-            row.block == dragged && area.top() < pointer.y && pointer.y < area.bottom()
+        let frame = self.frame.borrow();
+        let measured: Vec<(usize, Bounds<Pixels>)> = frame
+            .rows()
+            .iter()
+            .filter_map(|(block, area)| position(&flow, *block).map(|index| (index, *area)))
+            .collect();
+        let over_itself = measured.iter().any(|(index, area)| {
+            rows[*index].block == dragged && area.top() < pointer.y && pointer.y < area.bottom()
         });
         if over_itself {
             return None;
         }
-        let slot = slot_for(areas.iter().map(|area| area.center().y), pointer.y);
-        if slot == 0 && flow.first().map(|row| row.block) != Some(first.block) {
-            return None;
-        }
-        let offset = match slot.checked_sub(1) {
-            Some(above) => {
-                pointer.x - (areas[above].left() + GUTTER + INDENT * rows[above].depth as f32)
+        let above_count = slot_for(measured.iter().map(|(_, area)| area.center().y), pointer.y);
+        let slot = match (above_count.checked_sub(1), measured.get(above_count)) {
+            (None, Some((below, _))) => (*below == 0).then_some(0)?,
+            (None, None) => return None,
+            (Some(above), Some((below, _))) => {
+                (measured[above].0 + 1 == *below).then_some(*below)?
             }
-            None => px(0.),
+            (Some(above), None) => {
+                let last = measured[above].0;
+                (last + 1 == rows.len()).then_some(rows.len())?
+            }
+        };
+        let above = slot.checked_sub(1).and_then(|index| {
+            measured
+                .iter()
+                .find(|(flow_index, _)| *flow_index == index)
+                .map(|(_, area)| (index, *area))
+        });
+        let offset = match (slot, above) {
+            (0, _) => px(0.),
+            (_, Some((index, area))) => {
+                pointer.x - (area.left() + GUTTER + INDENT * rows[index].depth as f32)
+            }
+            (_, None) => return None,
         };
         let found = drop_target_for_position(&rows, dragged, slot, offset)?;
-        let y = match slot.checked_sub(1) {
-            Some(above) => areas[above].bottom(),
-            None => areas[0].top(),
+        let y = match above {
+            Some((_, area)) => area.bottom(),
+            None => measured.first()?.1.top(),
         };
-        let left = areas[0].left();
+        let first = measured.first()?.1;
         Some(DropMark {
             target: found.target,
-            x: left + GUTTER + INDENT * found.depth as f32,
+            x: first.left() + GUTTER + INDENT * found.depth as f32,
             y,
-            right: areas[0].right(),
+            right: first.right(),
         })
     }
 
@@ -941,5 +958,75 @@ mod tests {
         });
         assert!(scroll_y(&fixture, cx) <= px(-48.));
         fixture.with(cx, |window, cx| release_at(window, near_bottom, cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_drop_target_comes_from_the_full_flow_not_only_the_rendered_rows(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::editor::render::INDENT;
+
+        let mut doc = Doc::new();
+        let caret_row = doc.child(BlockKind::Text, "caret");
+        let parent = doc.child(BlockKind::Text, "parent");
+        let kids: Vec<BlockId> = (0..100)
+            .map(|number| doc.under(parent, BlockKind::Text, &format!("kid {number}")))
+            .collect();
+        let next = doc.child(BlockKind::Text, "next");
+        let tail: Vec<BlockId> = (0..40)
+            .map(|number| doc.child(BlockKind::Text, &format!("tail {number}")))
+            .collect();
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(
+            cx,
+            TextPoint {
+                block: caret_row,
+                offset: 0,
+            },
+        );
+        fixture.with(cx, |window, cx| {
+            let scroll = fixture.editor.read(cx).scroll.clone();
+            scroll.set_offset(point(px(0.), px(-2600.)));
+            for _ in 0..6 {
+                window.render_frame(cx);
+            }
+            let top = window.find(row_id(next)).bounds().top();
+            let mut offset = scroll.offset();
+            offset.y -= top - px(360.);
+            scroll.set_offset(offset);
+            for _ in 0..6 {
+                window.render_frame(cx);
+            }
+        });
+        fixture.with(cx, |window, _| {
+            assert!(
+                window.try_find(row_id(parent)).is_none(),
+                "the parent is culled"
+            );
+            assert!(
+                window.try_find(row_id(caret_row)).is_some(),
+                "the caret row is pinned"
+            );
+            assert!(window.try_find(row_id(kids[99])).is_some());
+        });
+        let (from, to) = fixture.with(cx, |window, _| {
+            let last_kid = window.find(row_id(kids[99])).bounds();
+            let from = handle_center(window, tail[0]);
+            let to = point(
+                last_kid.left() + GUTTER + INDENT - px(30.),
+                last_kid.bottom(),
+            );
+            (from, to)
+        });
+        fixture.with(cx, |window, cx| hold_drag(window, from, to, cx));
+        let mark = fixture
+            .with(cx, |_, cx| fixture.editor.read(cx).drop.get())
+            .expect("an indicator");
+        assert_eq!(mark.target.parent, Parent::Block(fixture.page));
+        assert_eq!(mark.target.after, Some(parent));
+        fixture.with(cx, |window, cx| release_at(window, to, cx));
+        let order = fixture.children_ids(cx, fixture.page);
+        assert_eq!(order[..4], [caret_row, parent, tail[0], next]);
+        assert_eq!(fixture.children_ids(cx, parent).len(), 100);
     }
 }

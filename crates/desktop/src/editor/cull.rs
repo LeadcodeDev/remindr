@@ -6,7 +6,7 @@ use remindr_core::domain::{BlockId, BlockKind};
 pub const TEXT_ESTIMATE: Pixels = px(26.);
 pub const HEADING_ESTIMATE: Pixels = px(32.);
 pub const DATABASE_ESTIMATE: Pixels = px(120.);
-const SETTLED: Pixels = px(0.5);
+pub const SETTLED: Pixels = px(0.5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
@@ -50,11 +50,24 @@ pub struct Entry {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Slot {
     Row(usize),
+    Held { index: usize, height: Pixels },
     Gap { height: Pixels, rows: usize },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anchor {
+    pub index: usize,
+    pub top: Pixels,
+}
+
+#[derive(Debug)]
+pub struct Plan {
+    pub slots: Vec<Slot>,
+    pub anchor: Option<Anchor>,
+}
+
 #[derive(Clone, Copy, Debug)]
-pub struct View {
+pub struct Viewport {
     pub top: Pixels,
     pub height: Pixels,
 }
@@ -116,17 +129,21 @@ pub fn plan(
     entries: &[Entry],
     heights: &Heights,
     lead: Pixels,
-    view: View,
+    viewport: Viewport,
     pinned: &[BlockId],
-) -> Vec<Slot> {
-    let from = view.top - view.height;
-    let to = view.top + view.height * 2.;
+) -> Plan {
+    let from = viewport.top - viewport.height;
+    let to = viewport.top + viewport.height * 2.;
     let mut slots = Vec::new();
+    let mut anchor = None;
     let mut gap = (px(0.), 0usize);
     let mut y = lead;
     for (index, entry) in entries.iter().enumerate() {
         let height = heights.of(entry);
         let bottom = y + height;
+        if anchor.is_none() && bottom > viewport.top {
+            anchor = Some(Anchor { index, top: y });
+        }
         let keep = (bottom >= from && y <= to) || pinned.contains(&entry.block);
         if keep {
             if gap.1 > 0 {
@@ -136,7 +153,11 @@ pub fn plan(
                 });
                 gap = (px(0.), 0);
             }
-            slots.push(Slot::Row(index));
+            slots.push(if bottom <= viewport.top {
+                Slot::Held { index, height }
+            } else {
+                Slot::Row(index)
+            });
         } else {
             gap.0 += height;
             gap.1 += 1;
@@ -149,7 +170,23 @@ pub fn plan(
             rows: gap.1,
         });
     }
-    slots
+    Plan { slots, anchor }
+}
+
+pub fn top_of(
+    entries: &[Entry],
+    heights: &Heights,
+    lead: Pixels,
+    block: BlockId,
+) -> Option<(usize, Pixels)> {
+    let mut y = lead;
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.block == block {
+            return Some((index, y));
+        }
+        y += heights.of(entry);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -157,7 +194,9 @@ mod tests {
     use gpui_kit::{Bounds, point, px, size};
     use remindr_core::domain::{BlockId, BlockKind, HeadingLevel, Uuid};
 
-    use super::{Class, Entry, HEADING_ESTIMATE, Heights, Slot, TEXT_ESTIMATE, View, plan};
+    use super::{
+        Class, Entry, HEADING_ESTIMATE, Heights, Slot, TEXT_ESTIMATE, Viewport, plan, top_of,
+    };
 
     fn id(n: u128) -> BlockId {
         BlockId::from_uuid(Uuid::from_u128(n))
@@ -172,8 +211,8 @@ mod tests {
             .collect()
     }
 
-    fn view(top: f32, height: f32) -> View {
-        View {
+    fn view(top: f32, height: f32) -> Viewport {
+        Viewport {
             top: px(top),
             height: px(height),
         }
@@ -183,7 +222,7 @@ mod tests {
         slots
             .iter()
             .filter_map(|slot| match slot {
-                Slot::Row(index) => Some(*index),
+                Slot::Row(index) | Slot::Held { index, .. } => Some(*index),
                 Slot::Gap { .. } => None,
             })
             .collect()
@@ -228,7 +267,8 @@ mod tests {
             px(8.),
             view(0., 600.),
             &[],
-        );
+        )
+        .slots;
         assert_eq!(rows_of(&slots), (0..10).collect::<Vec<_>>());
     }
 
@@ -240,7 +280,8 @@ mod tests {
             px(8.),
             view(0., 600.),
             &[],
-        );
+        )
+        .slots;
         let rows = rows_of(&slots);
         assert_eq!(rows.first(), Some(&0));
         let last = *rows.last().expect("rows");
@@ -265,7 +306,8 @@ mod tests {
             px(8.),
             view(3000., 600.),
             &[],
-        );
+        )
+        .slots;
         let rows = rows_of(&slots);
         let row = |offset: f32| (offset / TEXT_ESTIMATE.as_f32()) as usize;
         let first = *rows.first().expect("rows");
@@ -287,13 +329,13 @@ mod tests {
         let mut heights = Heights::default();
         let tall = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(300.)));
         heights.observe(&[(id(1), tall), (id(2), tall)], |_| None);
-        let slots = plan(&entries(300), &heights, px(8.), view(0., 600.), &[]);
+        let slots = plan(&entries(300), &heights, px(8.), view(0., 600.), &[]).slots;
         let rows = rows_of(&slots);
         assert!(rows.last().is_some_and(|last| *last < 40));
         let total: f32 = slots
             .iter()
             .map(|slot| match slot {
-                Slot::Gap { height, .. } => height.as_f32(),
+                Slot::Gap { height, .. } | Slot::Held { height, .. } => height.as_f32(),
                 Slot::Row(index) => heights.of(&entries(300)[*index]).as_f32(),
             })
             .sum();
@@ -308,7 +350,8 @@ mod tests {
             px(8.),
             view(0., 600.),
             &[id(251), id(1)],
-        );
+        )
+        .slots;
         let rows = rows_of(&slots);
         assert!(rows.contains(&250));
         let position = slots
@@ -322,19 +365,91 @@ mod tests {
     #[test]
     fn the_total_height_is_the_same_with_and_without_culling() {
         let heights = Heights::default();
-        let all = plan(&entries(300), &heights, px(8.), view(0., 100_000.), &[]);
+        let all = plan(&entries(300), &heights, px(8.), view(0., 100_000.), &[]).slots;
         assert_eq!(rows_of(&all).len(), 300);
-        let culled = plan(&entries(300), &heights, px(8.), view(0., 600.), &[]);
+        let culled = plan(&entries(300), &heights, px(8.), view(0., 600.), &[]).slots;
         let sum = |slots: &[Slot]| -> f32 {
             slots
                 .iter()
                 .map(|slot| match slot {
-                    Slot::Gap { height, .. } => height.as_f32(),
+                    Slot::Gap { height, .. } | Slot::Held { height, .. } => height.as_f32(),
                     Slot::Row(_) => TEXT_ESTIMATE.as_f32(),
                 })
                 .sum()
         };
         assert_eq!(sum(&all), sum(&culled));
+    }
+
+    #[test]
+    fn rows_entirely_above_the_viewport_are_held_at_their_model_height() {
+        let plan = plan(
+            &entries(300),
+            &Heights::default(),
+            px(8.),
+            view(3000., 600.),
+            &[id(1)],
+        );
+        let held: Vec<_> = plan
+            .slots
+            .iter()
+            .filter(|slot| matches!(slot, Slot::Held { .. }))
+            .collect();
+        assert!(held.len() > 15);
+        assert!(plan.slots.iter().any(|slot| matches!(
+            slot,
+            Slot::Held { index: 0, height } if *height == TEXT_ESTIMATE
+        )));
+        let rows: Vec<_> = plan
+            .slots
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Row(index) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        let anchor = plan.anchor.expect("an anchor");
+        assert_eq!(rows.first(), Some(&anchor.index));
+        let top = 8. + anchor.index as f32 * TEXT_ESTIMATE.as_f32();
+        assert_eq!(anchor.top, px(top));
+        assert!(anchor.top <= px(3000.));
+        assert!(anchor.top + TEXT_ESTIMATE > px(3000.));
+    }
+
+    #[test]
+    fn the_anchor_is_the_first_row_that_ends_below_the_top_edge() {
+        let at_top = plan(
+            &entries(10),
+            &Heights::default(),
+            px(8.),
+            view(0., 600.),
+            &[],
+        );
+        assert_eq!(
+            at_top.anchor.map(|anchor| (anchor.index, anchor.top)),
+            Some((0, px(8.)))
+        );
+        let none = plan(
+            &entries(3),
+            &Heights::default(),
+            px(8.),
+            view(5000., 600.),
+            &[],
+        );
+        assert_eq!(none.anchor, None);
+    }
+
+    #[test]
+    fn top_of_adds_up_the_heights_of_the_rows_before_the_block() {
+        let mut heights = Heights::default();
+        let tall = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(60.)));
+        heights.observe(&[(id(2), tall)], |_| None);
+        let all = entries(5);
+        assert_eq!(top_of(&all, &heights, px(8.), id(1)), Some((0, px(8.))));
+        assert_eq!(
+            top_of(&all, &heights, px(8.), id(4)),
+            Some((3, px(8.) + TEXT_ESTIMATE + px(60.) + TEXT_ESTIMATE))
+        );
+        assert_eq!(top_of(&all, &heights, px(8.), id(99)), None);
     }
 
     #[test]
@@ -355,7 +470,7 @@ mod tests {
     }
 
     use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{ScrollDelta, TestAppContext};
+    use gpui_kit::{Pixels, ScrollDelta, TestAppContext};
     use remindr_core::application::TextPoint;
 
     use crate::editor::render::row_id;
@@ -416,7 +531,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_scroll_extent_matches_the_uncuiled_page(cx: &mut TestAppContext) {
+    fn the_scroll_extent_matches_the_unculled_page(cx: &mut TestAppContext) {
         let (fixture, blocks) = many(cx, 300);
         settle(&fixture, cx);
         let row = fixture.with(cx, |window, _| {
@@ -537,5 +652,140 @@ mod tests {
             fixture.press(cx, "down");
         }
         assert_eq!(fixture.caret(cx).map(|caret| caret.block), Some(blocks[63]));
+    }
+
+    fn wrapping_page(cx: &mut TestAppContext, count: usize) -> (Fixture, Vec<BlockId>) {
+        let mut doc = Doc::new();
+        let long = "word ".repeat(40);
+        let blocks = (0..count)
+            .map(|number| {
+                let text = if number % 5 == 4 {
+                    format!("{number} {long}")
+                } else {
+                    format!("line {number}")
+                };
+                doc.child(BlockKind::Text, &text)
+            })
+            .collect();
+        (Fixture::open(cx, &doc), blocks)
+    }
+
+    fn settle_for(fixture: &Fixture, cx: &mut TestAppContext, frames: usize) {
+        fixture.with(cx, |window, cx| {
+            for _ in 0..frames {
+                window.render_frame(cx);
+            }
+        });
+    }
+
+    fn view_top(fixture: &Fixture, cx: &mut TestAppContext) -> Pixels {
+        fixture.with(cx, |_, cx| fixture.editor.read(cx).scroll.bounds().top())
+    }
+
+    fn first_visible(
+        fixture: &Fixture,
+        cx: &mut TestAppContext,
+        blocks: &[BlockId],
+        below: Pixels,
+    ) -> usize {
+        let top = view_top(fixture, cx);
+        fixture.with(cx, |window, _| {
+            blocks
+                .iter()
+                .position(|block| {
+                    window
+                        .try_find(row_id(*block))
+                        .is_some_and(|found| found.bounds().top() >= top + below)
+                })
+                .expect("a visible row")
+        })
+    }
+
+    fn row_top(fixture: &Fixture, cx: &mut TestAppContext, block: BlockId) -> Pixels {
+        fixture.with(cx, |window, _| window.find(row_id(block)).bounds().top())
+    }
+
+    #[gpui_kit::test]
+    fn wrapped_rows_are_taller_than_single_lines(cx: &mut TestAppContext) {
+        let (fixture, blocks) = wrapping_page(cx, 10);
+        let single = row_top(&fixture, cx, blocks[1]) - row_top(&fixture, cx, blocks[0]);
+        let wrapped = row_top(&fixture, cx, blocks[5]) - row_top(&fixture, cx, blocks[4]);
+        assert!(wrapped > single * 1.5, "{wrapped:?} against {single:?}");
+    }
+
+    #[gpui_kit::test]
+    fn scrolling_up_into_unmeasured_rows_does_not_move_the_visible_content(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, blocks) = wrapping_page(cx, 300);
+        scroll_to(&fixture, cx, 6000.);
+        settle_for(&fixture, cx, 6);
+        let tracked = first_visible(&fixture, cx, &blocks, px(40.));
+        let mut previous = row_top(&fixture, cx, blocks[tracked]);
+        for step in 0..45 {
+            fixture.with(cx, |window, cx| {
+                let editor = fixture.editor.read(cx);
+                let mut offset = editor.scroll.offset();
+                offset.y += px(20.);
+                editor.scroll.set_offset(offset);
+                window.render_frame(cx);
+            });
+            let now = row_top(&fixture, cx, blocks[tracked]);
+            assert!(
+                (now - previous - px(20.)).abs() < px(1.),
+                "step {step}: the tracked row moved {:?} instead of 20px",
+                now - previous
+            );
+            previous = now;
+        }
+    }
+
+    #[gpui_kit::test]
+    fn resizing_the_window_does_not_move_the_first_visible_row(cx: &mut TestAppContext) {
+        let (fixture, blocks) = wrapping_page(cx, 300);
+        scroll_to(&fixture, cx, 6000.);
+        settle_for(&fixture, cx, 6);
+        let top = view_top(&fixture, cx);
+        let anchor = fixture.with(cx, |window, _| {
+            blocks
+                .iter()
+                .position(|block| {
+                    window
+                        .try_find(row_id(*block))
+                        .is_some_and(|found| found.bounds().bottom() > top)
+                })
+                .expect("the row under the top edge")
+        });
+        let before = row_top(&fixture, cx, blocks[anchor]);
+        cx.simulate_window_resize(fixture.handle, size(px(480.), px(600.)));
+        for frame in 0..8 {
+            settle_for(&fixture, cx, 1);
+            let now = row_top(&fixture, cx, blocks[anchor]);
+            assert!(
+                (now - before).abs() < px(1.),
+                "frame {frame}: the anchor row moved {:?}",
+                now - before
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn editing_inside_the_view_does_not_scroll_it(cx: &mut TestAppContext) {
+        let (fixture, blocks) = wrapping_page(cx, 300);
+        scroll_to(&fixture, cx, 6000.);
+        settle_for(&fixture, cx, 6);
+        let tracked = first_visible(&fixture, cx, &blocks, px(100.));
+        fixture.focus_at(
+            cx,
+            TextPoint {
+                block: blocks[tracked],
+                offset: 2,
+            },
+        );
+        settle_for(&fixture, cx, 4);
+        let before = row_top(&fixture, cx, blocks[tracked]);
+        fixture.input(cx, "xyz");
+        settle_for(&fixture, cx, 2);
+        assert_eq!(row_top(&fixture, cx, blocks[tracked]), before);
     }
 }

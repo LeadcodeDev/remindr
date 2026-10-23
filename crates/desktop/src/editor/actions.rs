@@ -112,53 +112,58 @@ pub fn bind(cx: &mut App) {
 type Run = fn(&mut BlockEditor, &mut Window, &mut Context<BlockEditor>);
 
 trait Acts: InteractiveElement + Sized {
-    fn act<A: Action>(self, cx: &mut Context<BlockEditor>, run: Run) -> Self {
-        self.on_action(cx.listener(move |this, _: &A, window, cx| {
-            if this.modal() {
-                return;
-            }
-            this.commit_marked(window, cx);
-            run(this, window, cx);
-        }))
-    }
-
-    fn format<A: Action>(self, cx: &mut Context<BlockEditor>, run: Run) -> Self {
+    fn focused<A: Action>(
+        self,
+        cx: &mut Context<BlockEditor>,
+        run: impl Fn(&mut BlockEditor, &mut Window, &mut Context<BlockEditor>) + 'static,
+    ) -> Self {
         self.on_action(cx.listener(move |this, _: &A, window, cx| {
             if !this.focus.is_focused(window) {
                 cx.propagate();
                 return;
             }
+            run(this, window, cx);
+        }))
+    }
+
+    fn act<A: Action>(self, cx: &mut Context<BlockEditor>, run: Run) -> Self {
+        self.focused::<A>(cx, move |this, window, cx| {
             if this.modal() {
                 return;
             }
             this.commit_marked(window, cx);
             run(this, window, cx);
-        }))
+        })
     }
 }
 
 impl<E: InteractiveElement> Acts for E {}
 
 pub fn handle<E: InteractiveElement>(root: E, cx: &mut Context<BlockEditor>) -> E {
-    root.on_action(cx.listener(|this, _: &Backspace, window, cx| {
+    root.focused::<Backspace>(cx, |this, window, cx| {
         this.commit_marked(window, cx);
         if this.modal_backspace(cx) {
             return;
         }
         this.backspace(window, cx);
-    }))
+    })
     .act::<Delete>(cx, |this, window, cx| this.delete_forward(window, cx))
-    .on_action(cx.listener(|this, _: &Enter, window, cx| {
+    .focused::<Enter>(cx, |this, window, cx| {
         this.commit_marked(window, cx);
         if this.overlay_enter(window, cx) {
             return;
         }
         this.enter(window, cx);
-    }))
-    .on_action(cx.listener(|this, _: &Escape, _, cx| {
-        if !this.dismiss_overlay(cx) {
-            cx.propagate();
+    })
+    .on_action(cx.listener(|this, _: &Escape, window, cx| {
+        if this.dismiss_overlay(cx) {
+            return;
         }
+        if this.focus.contains_focused(window, cx) && !this.focus.is_focused(window) {
+            window.focus(&this.focus, cx);
+            return;
+        }
+        cx.propagate();
     }))
     .act::<SoftBreak>(cx, |this, window, cx| this.type_text("\n", window, cx))
     .act::<InsertBelow>(cx, |this, window, cx| this.insert_below(window, cx))
@@ -186,20 +191,20 @@ pub fn handle<E: InteractiveElement>(root: E, cx: &mut Context<BlockEditor>) -> 
         this.step_horizontal(false, true, true, cx)
     })
     .act::<SelectWordRight>(cx, |this, _, cx| this.step_horizontal(true, true, true, cx))
-    .on_action(cx.listener(|this, _: &MoveUp, window, cx| {
+    .focused::<MoveUp>(cx, |this, window, cx| {
         this.commit_marked(window, cx);
         if this.overlay_step(false, cx) {
             return;
         }
         this.step_vertical(false, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &MoveDown, window, cx| {
+    })
+    .focused::<MoveDown>(cx, |this, window, cx| {
         this.commit_marked(window, cx);
         if this.overlay_step(true, cx) {
             return;
         }
         this.step_vertical(true, false, cx);
-    }))
+    })
     .act::<SelectUp>(cx, |this, _, cx| this.step_vertical(false, true, cx))
     .act::<SelectDown>(cx, |this, _, cx| this.step_vertical(true, true, cx))
     .act::<MoveHome>(cx, |this, _, cx| this.step_line_edge(false, false, cx))
@@ -212,31 +217,138 @@ pub fn handle<E: InteractiveElement>(root: E, cx: &mut Context<BlockEditor>) -> 
     .act::<DeleteWordBackward>(cx, |this, window, cx| this.delete_word_backward(window, cx))
     .act::<DeleteWordForward>(cx, |this, window, cx| this.delete_word_forward(window, cx))
     .act::<DeleteLineBackward>(cx, |this, window, cx| this.delete_line_backward(window, cx))
-    .format::<ToggleBold>(cx, |this, window, cx| {
+    .act::<ToggleBold>(cx, |this, window, cx| {
         this.toggle_mark(Mark::Bold, window, cx)
     })
-    .format::<ToggleItalic>(cx, |this, window, cx| {
+    .act::<ToggleItalic>(cx, |this, window, cx| {
         this.toggle_mark(Mark::Italic, window, cx)
     })
-    .format::<ToggleUnderline>(cx, |this, window, cx| {
+    .act::<ToggleUnderline>(cx, |this, window, cx| {
         this.toggle_mark(Mark::Underline, window, cx)
     })
-    .format::<ToggleStrikethrough>(cx, |this, window, cx| {
+    .act::<ToggleStrikethrough>(cx, |this, window, cx| {
         this.toggle_mark(Mark::Strikethrough, window, cx)
     })
-    .format::<ToggleCode>(cx, |this, window, cx| {
+    .act::<ToggleCode>(cx, |this, window, cx| {
         this.toggle_mark(Mark::Code, window, cx)
     })
-    .format::<EditLink>(cx, |this, _, cx| this.open_link(cx))
-    .on_action(cx.listener(|this, _: &Copy, _, cx| {
+    .act::<EditLink>(cx, |this, _, cx| this.open_link(cx))
+    .focused::<Copy>(cx, |this, _, cx| {
         if !this.modal() {
             this.copy(cx);
         }
-    }))
-    .on_action(cx.listener(|this, _: &Cut, window, cx| {
+    })
+    .focused::<Cut>(cx, |this, window, cx| {
         if !this.modal() {
             this.cut(window, cx);
         }
-    }))
-    .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
+    })
+    .focused::<Paste>(cx, |this, window, cx| this.paste(window, cx))
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::TestAppContext;
+    use gpui_kit::test::TestWindowExt as _;
+    use remindr_core::application::Command;
+    use remindr_core::domain::{BlockId, BlockKind, Parent};
+
+    use crate::app::testing::{Ui, add_block, add_page, model_with};
+    use crate::editor::render::row_id;
+
+    fn focus_new_button(ui: &Ui, cx: &mut TestAppContext) {
+        for _ in 0..16 {
+            ui.with(cx, |window, cx| window.focus_next(cx));
+            let focused = ui.with(cx, |window, _| {
+                window
+                    .try_find("toolbar-new")
+                    .and_then(|found| found.focused())
+            });
+            if focused == Some(true) {
+                return;
+            }
+        }
+        panic!("the New button never took the focus");
+    }
+
+    fn text_of(ui: &Ui, cx: &mut TestAppContext, block: BlockId) -> String {
+        cx.read(|cx| {
+            ui.model
+                .read(cx)
+                .workspace()
+                .block(block)
+                .map(|found| found.text.to_plain())
+                .unwrap_or_default()
+        })
+    }
+
+    fn seeded(cx: &mut TestAppContext) -> (Ui, BlockId) {
+        let mut ids = None;
+        let model = model_with(cx, |session| {
+            let page = add_page(session, Parent::Root, "Notes");
+            let text = add_block(session, page, BlockKind::Text, "hello");
+            session
+                .execute(Command::CreateDatabaseWithView { after: text })
+                .expect("database view");
+            ids = Some(text);
+        });
+        let text = ids.expect("seeded");
+        (Ui::open(cx, &model), text)
+    }
+
+    #[gpui_kit::test]
+    fn keys_pressed_inside_an_embedded_view_do_not_edit_the_page(cx: &mut TestAppContext) {
+        let (ui, text) = seeded(cx);
+        ui.click(cx, row_id(text));
+        ui.press(cx, "backspace");
+        assert_eq!(text_of(&ui, cx, text), "hell");
+        focus_new_button(&ui, cx);
+        ui.press(cx, "backspace");
+        assert_eq!(text_of(&ui, cx, text), "hell");
+        ui.press(cx, "left");
+        ui.press(cx, "enter");
+        ui.press(cx, "secondary-a");
+        ui.press(cx, "secondary-b");
+        ui.press(cx, "alt-backspace");
+        ui.press(cx, "cmd-backspace");
+        assert_eq!(text_of(&ui, cx, text), "hell");
+        let blocks = cx.read(|cx| {
+            ui.model
+                .read(cx)
+                .workspace()
+                .children(Parent::Block(parent_of(&ui, cx, text)))
+                .count()
+        });
+        assert_eq!(blocks, 2);
+    }
+
+    fn parent_of(ui: &Ui, cx: &gpui_kit::App, block: BlockId) -> BlockId {
+        match ui.model.read(cx).workspace().block(block).map(|b| b.parent) {
+            Some(Parent::Block(page)) => page,
+            _ => panic!("a block under a page"),
+        }
+    }
+
+    #[gpui_kit::test]
+    fn escape_inside_an_embedded_view_gives_the_focus_back_to_the_editor(cx: &mut TestAppContext) {
+        let (ui, text) = seeded(cx);
+        ui.click(cx, row_id(text));
+        focus_new_button(&ui, cx);
+        ui.press(cx, "backspace");
+        assert_eq!(text_of(&ui, cx, text), "hello");
+        ui.press(cx, "escape");
+        ui.press(cx, "backspace");
+        assert_eq!(text_of(&ui, cx, text), "hell");
+        ui.input(cx, "o!");
+        assert_eq!(text_of(&ui, cx, text), "hello!");
+    }
+
+    #[gpui_kit::test]
+    fn escape_with_the_editor_focused_and_nothing_open_changes_nothing(cx: &mut TestAppContext) {
+        let (ui, text) = seeded(cx);
+        ui.click(cx, row_id(text));
+        ui.press(cx, "escape");
+        ui.press(cx, "backspace");
+        assert_eq!(text_of(&ui, cx, text), "hell");
+    }
 }

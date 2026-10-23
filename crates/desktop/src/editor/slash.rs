@@ -1,5 +1,5 @@
 use gpui_kit::{App, Context, ScrollHandle, SharedString, Window};
-use remindr_core::application::{Command, TextPoint};
+use remindr_core::application::{Changes, Command, Created, TextPoint};
 use remindr_core::domain::{
     BlockId, BlockKind, CodeLanguage, DatabaseId, Emoji, HeadingLevel, Parent,
 };
@@ -32,6 +32,7 @@ pub struct Item {
 }
 
 const NO_DATABASE: &str = "No database yet";
+const NESTED: &str = "Has nested blocks";
 const CALLOUT_ICON: &str = "\u{1F4A1}";
 
 pub const ITEMS: [Item; 15] = [
@@ -194,7 +195,27 @@ impl Picker {
 
 pub struct Entry {
     pub item: &'static Item,
-    pub enabled: bool,
+    pub reason: Option<&'static str>,
+}
+
+impl Entry {
+    pub fn enabled(&self) -> bool {
+        self.reason.is_none()
+    }
+}
+
+pub fn blocked(
+    choice: Choice,
+    linked: bool,
+    nested: bool,
+    remaining: usize,
+) -> Option<&'static str> {
+    match choice {
+        Choice::DatabaseView if !linked => Some(NO_DATABASE),
+        Choice::Heading(_) | Choice::Code if nested => Some(NESTED),
+        Choice::Divider if nested && remaining == 0 => Some(NESTED),
+        _ => None,
+    }
 }
 
 pub struct DatabaseEntry {
@@ -271,13 +292,27 @@ impl BlockEditor {
         self.model.read(cx).workspace().databases().next().is_some()
     }
 
+    pub(super) fn has_children(&self, block: BlockId, cx: &App) -> bool {
+        self.model
+            .read(cx)
+            .workspace()
+            .children(Parent::Block(block))
+            .next()
+            .is_some()
+    }
+
     pub(super) fn slash_entries(&self, slash: &Slash, cx: &App) -> Vec<Entry> {
         let linked = self.has_database(cx);
+        let nested = self.has_children(slash.block, cx);
+        let remaining = self
+            .block(slash.block, cx)
+            .map_or(0, |found| found.text.len())
+            .saturating_sub(1 + slash.query.len());
         filter(&slash.query)
             .into_iter()
             .map(|item| Entry {
                 item,
-                enabled: linked || item.choice != Choice::DatabaseView,
+                reason: blocked(item.choice, linked, nested, remaining),
             })
             .collect()
     }
@@ -287,9 +322,9 @@ impl BlockEditor {
             .into_iter()
             .map(|entry| MenuRow {
                 label: SharedString::from(entry.item.label),
-                detail: (!entry.enabled).then(|| SharedString::from(NO_DATABASE)),
+                detail: entry.reason.map(SharedString::from),
                 icon: None,
-                enabled: entry.enabled,
+                enabled: entry.enabled(),
             })
             .collect()
     }
@@ -303,7 +338,9 @@ impl BlockEditor {
         if count == 0 {
             return;
         }
-        let next = step_index(slash.selected, count, down, |index| entries[index].enabled);
+        let next = step_index(slash.selected, count, down, |index| {
+            entries[index].enabled()
+        });
         if let Some(Overlay::Slash(slash)) = &mut self.overlay {
             slash.selected = next;
             slash.scroll.scroll_to_item(next);
@@ -328,7 +365,7 @@ impl BlockEditor {
             cx.notify();
             return false;
         };
-        if !entry.enabled {
+        if !entry.enabled() {
             return true;
         }
         let choice = entry.item.choice;
@@ -408,20 +445,38 @@ impl BlockEditor {
                 self.overlay = Some(Overlay::Picker(Picker::new(block, start)));
                 cx.notify();
             }
-            Choice::Divider => {
-                let command = Command::ChangeKind {
-                    block,
-                    kind: BlockKind::Divider,
-                };
-                if self.dispatch(command, window, cx).is_some() {
-                    self.continue_after_divider(block, window, cx);
-                }
-            }
+            Choice::Divider => self.place_divider(block, window, cx),
             other => {
                 if let Some(kind) = kind_of(other) {
                     self.dispatch(Command::ChangeKind { block, kind }, window, cx);
                 }
             }
+        }
+    }
+
+    fn place_divider(&mut self, block: BlockId, window: &mut Window, cx: &mut Context<Self>) {
+        let holds_text = self
+            .block(block, cx)
+            .is_some_and(|found| !found.text.is_empty());
+        if holds_text {
+            let command = Command::InsertBlock {
+                after: block,
+                kind: BlockKind::Divider,
+            };
+            let created = self
+                .dispatch(command, window, cx)
+                .and_then(|changes| created_block(&changes));
+            if let Some(divider) = created {
+                self.continue_after_divider(divider, window, cx);
+            }
+            return;
+        }
+        let command = Command::ChangeKind {
+            block,
+            kind: BlockKind::Divider,
+        };
+        if self.dispatch(command, window, cx).is_some() {
+            self.continue_after_divider(block, window, cx);
         }
     }
 
@@ -591,6 +646,13 @@ impl BlockEditor {
             cx.notify();
         }
     }
+}
+
+fn created_block(changes: &Changes) -> Option<BlockId> {
+    changes.created.iter().find_map(|created| match created {
+        Created::Block(block) => Some(*block),
+        _ => None,
+    })
 }
 
 pub fn single_line(text: &str) -> String {
@@ -1280,5 +1342,156 @@ mod tests {
             Some(BlockKind::Heading(HeadingLevel::One))
         );
         assert_eq!(fixture.parent(cx, child), Some(Parent::Block(parent)));
+    }
+
+    #[gpui_kit::test]
+    fn slash_divider_after_text_keeps_the_text_and_inserts_the_divider_below(
+        cx: &mut TestAppContext,
+    ) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "foo ");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 4));
+        fixture.input(cx, "/divider");
+        fixture.press(cx, "enter");
+        assert_eq!(fixture.text(cx, block), "foo ");
+        assert_eq!(fixture.kind(cx, block), Some(BlockKind::Text));
+        assert_eq!(
+            fixture.children_kinds(cx, fixture.page),
+            vec![BlockKind::Text, BlockKind::Divider, BlockKind::Text]
+        );
+        let children = fixture.children_ids(cx, fixture.page);
+        assert_eq!(fixture.caret(cx), Some(at(children[2], 0)));
+        assert_eq!(
+            fixture.texts(cx),
+            vec!["foo ".to_owned(), String::new(), String::new()]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn slash_divider_after_text_reuses_the_following_block(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "foo ");
+        let next = doc.child(BlockKind::Text, "next");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 4));
+        fixture.input(cx, "/divider");
+        fixture.press(cx, "enter");
+        let children = fixture.children_ids(cx, fixture.page);
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], block);
+        assert_eq!(fixture.kind(cx, children[1]), Some(BlockKind::Divider));
+        assert_eq!(children[2], next);
+        assert_eq!(fixture.caret(cx), Some(at(next, 0)));
+        assert_eq!(fixture.text(cx, block), "foo ");
+    }
+
+    #[gpui_kit::test]
+    fn slash_divider_with_text_after_the_caret_keeps_that_text(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "foo tail");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 4));
+        fixture.input(cx, "/hr");
+        fixture.press(cx, "enter");
+        assert_eq!(fixture.text(cx, block), "foo tail");
+        assert_eq!(
+            fixture.children_kinds(cx, fixture.page)[..2],
+            [BlockKind::Text, BlockKind::Divider]
+        );
+    }
+
+    fn with_child(cx: &mut TestAppContext, text: &str) -> (Fixture, BlockId, BlockId) {
+        let mut doc = Doc::new();
+        let parent = doc.child(BlockKind::Text, text);
+        let child = doc.under(parent, BlockKind::Text, "kid");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(parent, text.len()));
+        (fixture, parent, child)
+    }
+
+    #[gpui_kit::test]
+    fn items_that_cannot_hold_children_are_disabled_on_a_block_with_children(
+        cx: &mut TestAppContext,
+    ) {
+        for (typing, label) in [
+            ("/h1", "Heading 1, Has nested blocks"),
+            ("/code", "Code, Has nested blocks"),
+            ("/divider", "Divider, Has nested blocks"),
+        ] {
+            let (fixture, parent, child) = with_child(cx, "");
+            fixture.input(cx, typing);
+            assert_eq!(fixture.label_of(cx, slash_item(0)).as_deref(), Some(label));
+            fixture.press(cx, "enter");
+            assert!(fixture.shown(cx, "slash-menu"), "{typing}");
+            assert_eq!(fixture.text(cx, parent), typing);
+            assert_eq!(fixture.kind(cx, parent), Some(BlockKind::Text));
+            assert_eq!(fixture.children_ids(cx, parent), vec![child]);
+            assert!(!fixture.has_notification(cx), "{typing}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn items_that_hold_children_stay_enabled_on_a_block_with_children(cx: &mut TestAppContext) {
+        let (fixture, parent, child) = with_child(cx, "");
+        fixture.input(cx, "/quote");
+        assert_eq!(
+            fixture.label_of(cx, slash_item(0)).as_deref(),
+            Some("Quote")
+        );
+        fixture.press(cx, "enter");
+        assert_eq!(fixture.kind(cx, parent), Some(BlockKind::Quote));
+        assert_eq!(fixture.children_ids(cx, parent), vec![child]);
+    }
+
+    #[gpui_kit::test]
+    fn the_divider_item_stays_enabled_when_text_remains_on_a_block_with_children(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, parent, child) = with_child(cx, "foo ");
+        fixture.input(cx, "/divider");
+        assert_eq!(
+            fixture.label_of(cx, slash_item(0)).as_deref(),
+            Some("Divider")
+        );
+        fixture.press(cx, "enter");
+        assert_eq!(fixture.text(cx, parent), "foo ");
+        assert_eq!(fixture.children_ids(cx, parent), vec![child]);
+        assert_eq!(
+            fixture.children_kinds(cx, fixture.page)[..2],
+            [BlockKind::Text, BlockKind::Divider]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn slash_page_creates_a_sub_page_listed_in_the_sidebar(cx: &mut TestAppContext) {
+        use crate::app::testing::{Ui, add_block, add_page, model_with};
+        use crate::sidebar::{page_entry_id, page_toggle_id};
+
+        let mut seeded = None;
+        let model = model_with(cx, |session| {
+            let page = add_page(session, Parent::Root, "Notes");
+            let block = add_block(session, page, BlockKind::Text, "");
+            seeded = Some((page, block));
+        });
+        let (page, block) = seeded.expect("seeded");
+        let ui = Ui::open(cx, &model);
+        ui.click(cx, crate::editor::render::row_id(block));
+        ui.input(cx, "/page");
+        ui.press(cx, "enter");
+        let child = cx.read(|cx| {
+            model
+                .read(cx)
+                .workspace()
+                .children(Parent::Block(page))
+                .find(|found| matches!(found.kind, BlockKind::Page { .. }))
+                .map(|found| found.id)
+        });
+        let child = child.expect("the sub-page block");
+        if ui.find(cx, page_entry_id(child)).is_none() {
+            ui.click(cx, page_toggle_id(page));
+        }
+        assert!(ui.find(cx, page_entry_id(child)).is_some());
+        assert!(ui.find(cx, crate::editor::render::row_id(child)).is_some());
     }
 }

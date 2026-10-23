@@ -1,6 +1,7 @@
 use gpui_kit::{
     Anchor, AnyElement, App, Bounds, Context, Entity, MouseButton, Pixels, Point, ScrollHandle,
     SharedString, Size, TestSupportExt, Window, anchored, deferred, div, point, prelude::*, px,
+    size,
 };
 
 use super::BlockEditor;
@@ -213,7 +214,7 @@ impl BlockEditor {
         match self.overlay.as_ref()? {
             Overlay::Slash(slash) => {
                 let rows = self.slash_rows(slash, cx);
-                let line = self.frame.borrow().line_box(slash.block, slash.start)?;
+                let line = self.anchor_line(slash.block, slash.start);
                 let placement = place(line, menu_height(rows.len()), window.viewport_size());
                 let editor = editor.clone();
                 let menu = list_menu(
@@ -233,7 +234,7 @@ impl BlockEditor {
             }
             Overlay::Picker(picker) => {
                 let rows = self.picker_rows(picker, cx);
-                let line = self.frame.borrow().line_box(picker.block, picker.start)?;
+                let line = self.anchor_line(picker.block, picker.start);
                 let placement = place(line, menu_height(rows.len()), window.viewport_size());
                 let editor = editor.clone();
                 let menu = list_menu(
@@ -252,15 +253,24 @@ impl BlockEditor {
                 Some(floating(placement, menu))
             }
             Overlay::Link(entry) => {
-                let line = self
-                    .frame
-                    .borrow()
-                    .line_box(entry.head.block, entry.head.offset)?;
+                let line = self.anchor_line(entry.head.block, entry.head.offset);
                 let extra = if entry.error { ERROR_HEIGHT } else { px(0.) };
                 let placement = place(line, menu_height(1) + extra, window.viewport_size());
                 Some(floating(placement, link_box(entry, palette)))
             }
         }
+    }
+
+    fn anchor_line(&self, block: remindr_core::domain::BlockId, offset: usize) -> Bounds<Pixels> {
+        let frame = self.frame.borrow();
+        frame
+            .line_box(block, offset)
+            .or_else(|| {
+                frame
+                    .row_box(block)
+                    .map(|row| Bounds::new(row.origin, size(px(1.), row.size.height)))
+            })
+            .unwrap_or_else(|| Bounds::new(self.scroll.bounds().origin, size(px(1.), px(0.))))
     }
 
     pub(super) fn overlay_blocks(&self) -> Vec<remindr_core::domain::BlockId> {

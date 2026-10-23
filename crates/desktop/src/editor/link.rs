@@ -23,8 +23,45 @@ pub struct LinkEntry {
 }
 
 pub const ERROR_HEIGHT: Pixels = px(22.);
+const BARE_SCHEMES: [&str; 4] = ["mailto", "tel", "sms", "file"];
 const INVALID: &str = "This is not a valid link";
 const PLACEHOLDER: &str = "Paste or type a link";
+
+fn is_scheme(candidate: &str) -> bool {
+    candidate
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+}
+
+fn is_port(rest: &str) -> bool {
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    digits > 0
+        && rest[digits..]
+            .chars()
+            .next()
+            .is_none_or(|c| matches!(c, '/' | '?' | '#'))
+}
+
+pub fn with_scheme(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix("//") {
+        return format!("https://{rest}");
+    }
+    match raw.split_once(':') {
+        Some((scheme, rest))
+            if is_scheme(scheme)
+                && (rest.starts_with("//")
+                    || BARE_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
+                    || !is_port(rest)) =>
+        {
+            raw.to_owned()
+        }
+        _ => format!("https://{raw}"),
+    }
+}
 
 impl BlockEditor {
     pub(super) fn open_link(&mut self, cx: &mut Context<Self>) {
@@ -37,6 +74,35 @@ impl BlockEditor {
             return;
         };
         let covered = flow.get(span.first..=span.last).unwrap_or_default();
+        let holds_text = |block| {
+            workspace
+                .block(block)
+                .is_some_and(|found| !is_atomic_row(&found.kind))
+        };
+        let head = if holds_text(selection.head.block) {
+            selection.head
+        } else {
+            let last = covered.len();
+            let Some((index, row)) = covered
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, row)| holds_text(row.block))
+            else {
+                return;
+            };
+            let offset = if index + 1 == last {
+                span.end.offset
+            } else {
+                workspace
+                    .block(row.block)
+                    .map_or(0, |found| found.text.len())
+            };
+            TextPoint {
+                block: row.block,
+                offset,
+            }
+        };
         let mut shared: Option<Option<&Link>> = None;
         let mut agreed = true;
         for (index, row) in covered.iter().enumerate() {
@@ -67,6 +133,9 @@ impl BlockEditor {
                 }
             }
         }
+        if shared.is_none() {
+            return;
+        }
         let text = shared
             .flatten()
             .filter(|_| agreed)
@@ -75,7 +144,7 @@ impl BlockEditor {
         self.overlay = Some(Overlay::Link(LinkEntry {
             start: span.start,
             end: span.end,
-            head: selection.head,
+            head,
             text,
             error: false,
         }));
@@ -90,7 +159,7 @@ impl BlockEditor {
         let change = if trimmed.is_empty() {
             MarkChange::Link(None)
         } else {
-            match Link::try_from(trimmed) {
+            match Link::try_from(with_scheme(trimmed).as_str()) {
                 Ok(link) => MarkChange::Link(Some(link)),
                 Err(_) => {
                     entry.error = true;
@@ -219,6 +288,7 @@ mod tests {
     use remindr_core::application::TextPoint;
     use remindr_core::domain::{BlockId, BlockKind, Link, Marks, RichText, Span};
 
+    use super::with_scheme;
     use crate::editor::render::row_id;
     use crate::editor::testing::{Doc, Fixture};
 
@@ -342,7 +412,10 @@ mod tests {
         fixture.input(cx, "c");
         assert_eq!(fixture.label_of(cx, "link-text").as_deref(), Some("ac"));
         fixture.press(cx, "enter");
-        assert_eq!(url_of(&fixture, cx, block), vec![Some("ac".to_owned())]);
+        assert_eq!(
+            url_of(&fixture, cx, block),
+            vec![Some("https://ac".to_owned())]
+        );
     }
 
     #[gpui_kit::test]
@@ -421,6 +494,144 @@ mod tests {
             (at(block, 0), at(block, 4))
         );
         assert_eq!(fixture.text(cx, block), "word");
+    }
+
+    #[gpui_kit::test]
+    fn cmd_k_with_the_head_on_a_divider_anchors_on_the_last_text_row(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "word");
+        let divider = doc.child(BlockKind::Divider, "");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.select(cx, at(block, 0), at(divider, 0));
+        fixture.press(cx, "secondary-k");
+        assert!(fixture.shown(cx, "link-input"));
+        let (input, row) = fixture.with(cx, |window, _| {
+            (
+                window.find("link-input").bounds(),
+                window.find(row_id(block)).bounds(),
+            )
+        });
+        assert!(input.top() >= row.bottom() - px(8.));
+        assert!(input.top() <= row.bottom() + px(16.));
+        fixture.input(cx, "https://x.dev");
+        fixture.press(cx, "enter");
+        assert_eq!(
+            url_of(&fixture, cx, block),
+            vec![Some("https://x.dev".to_owned())]
+        );
+        assert!(fixture.alive(cx, divider));
+    }
+
+    #[gpui_kit::test]
+    fn cmd_k_over_only_atomic_rows_does_not_open(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let first = doc.child(BlockKind::Divider, "");
+        let second = doc.child(BlockKind::Divider, "");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.select(cx, at(first, 0), at(second, 0));
+        fixture.press(cx, "secondary-k");
+        assert!(!fixture.shown(cx, "link-input"));
+        fixture.select(cx, at(second, 0), at(first, 0));
+        fixture.press(cx, "secondary-k");
+        assert!(!fixture.shown(cx, "link-input"));
+    }
+
+    #[gpui_kit::test]
+    fn the_link_input_stays_visible_when_its_row_loses_its_text_geometry(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "word");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.select(cx, at(block, 0), at(block, 4));
+        fixture.press(cx, "secondary-k");
+        assert!(fixture.shown(cx, "link-input"));
+        fixture.with(cx, |_, cx| {
+            fixture
+                .model
+                .update(cx, |model, cx| {
+                    model.execute(
+                        remindr_core::application::Command::ChangeKind {
+                            block,
+                            kind: BlockKind::Divider,
+                        },
+                        cx,
+                    )
+                })
+                .expect("change kind");
+        });
+        assert!(fixture.shown(cx, "link-input"));
+        fixture.press(cx, "escape");
+        assert!(!fixture.shown(cx, "link-input"));
+    }
+
+    #[gpui_kit::test]
+    fn a_link_without_a_scheme_gets_https(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "word");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.select(cx, at(block, 0), at(block, 4));
+        fixture.press(cx, "secondary-k");
+        fixture.input(cx, "example.com");
+        fixture.press(cx, "enter");
+        assert_eq!(
+            url_of(&fixture, cx, block),
+            vec![Some("https://example.com".to_owned())]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_link_with_a_scheme_is_kept_as_typed(cx: &mut TestAppContext) {
+        for url in [
+            "http://x.dev/a",
+            "mailto:me@x.dev",
+            "tel:+33123456",
+            "ftp://h/f",
+        ] {
+            let mut doc = Doc::new();
+            let block = doc.child(BlockKind::Text, "word");
+            let fixture = Fixture::open(cx, &doc);
+            fixture.select(cx, at(block, 0), at(block, 4));
+            fixture.press(cx, "secondary-k");
+            fixture.input(cx, url);
+            fixture.press(cx, "enter");
+            assert_eq!(url_of(&fixture, cx, block), vec![Some(url.to_owned())]);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_link_with_spaces_is_still_refused_without_a_scheme(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "word");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.select(cx, at(block, 0), at(block, 4));
+        fixture.press(cx, "secondary-k");
+        fixture.input(cx, "example .com");
+        fixture.press(cx, "enter");
+        assert!(fixture.shown(cx, "link-error"));
+        assert_eq!(url_of(&fixture, cx, block), vec![None]);
+    }
+
+    #[test]
+    fn with_scheme_prefixes_https_only_when_there_is_no_scheme() {
+        assert_eq!(with_scheme("example.com"), "https://example.com");
+        assert_eq!(
+            with_scheme("example.com/a?b=c:d"),
+            "https://example.com/a?b=c:d"
+        );
+        assert_eq!(with_scheme("localhost:3000"), "https://localhost:3000");
+        assert_eq!(
+            with_scheme("example.com:8080/x"),
+            "https://example.com:8080/x"
+        );
+        assert_eq!(with_scheme("https://a.dev"), "https://a.dev");
+        assert_eq!(with_scheme("HTTP://a.dev"), "HTTP://a.dev");
+        assert_eq!(with_scheme("mailto:a@b.dev"), "mailto:a@b.dev");
+        assert_eq!(with_scheme("tel:5551234"), "tel:5551234");
+        assert_eq!(
+            with_scheme("custom-app:open/thing"),
+            "custom-app:open/thing"
+        );
+        assert_eq!(with_scheme("//a.dev"), "https://a.dev");
+        assert_eq!(with_scheme("www.a.dev"), "https://www.a.dev");
     }
 
     fn doc_with_link() -> (Doc, BlockId) {

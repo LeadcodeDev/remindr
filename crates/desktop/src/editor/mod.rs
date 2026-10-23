@@ -45,7 +45,7 @@ mod timing;
 mod ui_tests;
 
 use caret::{Blink, Marked, Selection, floor_boundary};
-use cull::{Class, Entry, Heights, Slot, View};
+use cull::{Class, Entry, Heights, SETTLED, Slot, Viewport};
 use drag::DropMark;
 use element::EditorRoot;
 use format::Pending;
@@ -80,6 +80,7 @@ pub struct BlockEditor {
     first_paint: timing::FirstPaint,
     layout_changed: Cell<bool>,
     revealed: Cell<Option<Pixels>>,
+    anchor: Cell<Option<(BlockId, usize, Pixels)>>,
     drag_block: Cell<Option<BlockId>>,
     pointer: Cell<Option<Point<Pixels>>>,
     drop: Cell<Option<DropMark>>,
@@ -90,6 +91,7 @@ pub struct BlockEditor {
 
 enum Layout {
     Row,
+    Held(Pixels),
     Gap(Pixels),
 }
 
@@ -168,6 +170,7 @@ impl BlockEditor {
             first_paint,
             layout_changed: Cell::new(false),
             revealed: Cell::new(None),
+            anchor: Cell::new(None),
             drag_block: Cell::new(None),
             pointer: Cell::new(None),
             drop: Cell::new(None),
@@ -420,6 +423,27 @@ impl BlockEditor {
         above || below
     }
 
+    fn keep_anchor(&self, entries: &[Entry]) {
+        let Some((block, index, previous)) = self.anchor.get() else {
+            return;
+        };
+        let Some((now_index, now)) =
+            cull::top_of(entries, &self.heights.borrow(), CONTENT_LEAD, block)
+        else {
+            return;
+        };
+        let shift = now - previous;
+        if now_index != index || shift.abs() <= SETTLED {
+            return;
+        }
+        let mut offset = self.scroll.offset();
+        offset.y = (offset.y - shift).min(px(0.));
+        self.scroll.set_offset(offset);
+        if self.revealed.get().is_some() {
+            self.revealed.set(Some(offset.y));
+        }
+    }
+
     fn snapshot(&self, palette: &Palette, cx: &App) -> Snapshot {
         let workspace = self.model.read(cx).workspace();
         let rows = self.visible_rows(cx);
@@ -436,27 +460,33 @@ impl BlockEditor {
                     .map_or(Class::Text, |block| Class::of(&block.kind)),
             })
             .collect();
-        let view = View {
+        self.keep_anchor(&entries);
+        let viewport = Viewport {
             top: (-self.scroll.offset().y).max(px(0.)),
             height: self.viewport_height(),
         };
-        let slots = cull::plan(
+        let plan = cull::plan(
             &entries,
             &self.heights.borrow(),
             CONTENT_LEAD,
-            view,
+            viewport,
             &self.pinned_blocks(),
         );
+        self.anchor.set(
+            plan.anchor
+                .map(|anchor| (entries[anchor.index].block, anchor.index, anchor.top)),
+        );
         let mut specs = Vec::new();
-        let mut layout = Vec::with_capacity(slots.len());
+        let mut layout = Vec::with_capacity(plan.slots.len());
         let mut decorations: HashMap<u64, Vec<(Range<usize>, Hsla)>> = HashMap::new();
-        for slot in slots {
-            let index = match slot {
+        for slot in plan.slots {
+            let (index, held) = match slot {
                 Slot::Gap { height, .. } => {
                     layout.push(Layout::Gap(height));
                     continue;
                 }
-                Slot::Row(index) => index,
+                Slot::Row(index) => (index, None),
+                Slot::Held { index, height } => (index, Some(height)),
             };
             let row = &rows[index];
             let Some(block) = workspace.block(row.block) else {
@@ -471,7 +501,7 @@ impl BlockEditor {
                     .or_default()
                     .push((part, palette.selection));
             }
-            layout.push(Layout::Row);
+            layout.push(held.map_or(Layout::Row, Layout::Held));
             specs.push(RowSpec {
                 row: *row,
                 kind: RowKind::of(&block.kind),
@@ -620,6 +650,22 @@ impl Render for BlockEditor {
                     };
                     let embed = self.embed(&spec, window, cx);
                     elements.push(render::row(spec, embed, &env, window, cx));
+                }
+                Layout::Held(height) => {
+                    let Some(spec) = specs.next() else {
+                        continue;
+                    };
+                    let embed = self.embed(&spec, window, cx);
+                    let row = render::row(spec, embed, &env, window, cx);
+                    elements.push(
+                        div()
+                            .w_full()
+                            .h(height)
+                            .flex_none()
+                            .overflow_hidden()
+                            .child(row)
+                            .into_any_element(),
+                    );
                 }
                 Layout::Gap(height) => {
                     elements.push(div().w_full().h(height).flex_none().into_any_element())
