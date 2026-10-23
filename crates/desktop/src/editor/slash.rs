@@ -318,32 +318,32 @@ impl BlockEditor {
         self.slash_confirm(window, cx);
     }
 
-    pub(super) fn slash_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn slash_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(Overlay::Slash(slash)) = &self.overlay else {
-            return;
+            return false;
         };
         let entries = self.slash_entries(slash, cx);
         let Some(entry) = entries.get(slash.selected) else {
             self.overlay = None;
             cx.notify();
-            return;
+            return false;
         };
         if !entry.enabled {
-            return;
+            return true;
         }
         let choice = entry.item.choice;
         let (block, start) = (slash.block, slash.start);
         let Some(query) = self.slash_query(cx) else {
             self.overlay = None;
             cx.notify();
-            return;
+            return false;
         };
         self.overlay = None;
         let end = start + 1 + query.len();
-        if !self.remove_text(block, start..end, window, cx) {
-            return;
+        if self.remove_text(block, start..end, window, cx) {
+            self.apply_choice(choice, block, start, window, cx);
         }
-        self.apply_choice(choice, block, start, window, cx);
+        true
     }
 
     fn remove_text(
@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn no_match_shows_a_row_and_enter_closes_the_menu(cx: &mut TestAppContext) {
+    fn no_match_shows_a_row_in_the_menu(cx: &mut TestAppContext) {
         let mut doc = Doc::new();
         let block = doc.child(BlockKind::Text, "");
         let fixture = open(cx, &doc, block);
@@ -813,10 +813,87 @@ mod tests {
         assert!(fixture.shown(cx, "slash-menu"));
         assert!(fixture.shown(cx, "slash-empty"));
         assert!(!fixture.shown(cx, slash_item(0)));
+        assert_eq!(fixture.text(cx, block), "/zzz");
+    }
+
+    #[gpui_kit::test]
+    fn enter_with_no_results_closes_the_menu_and_splits(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "");
+        let fixture = open(cx, &doc, block);
+        fixture.input(cx, "/zzz");
+        assert!(fixture.shown(cx, "slash-empty"));
         fixture.press(cx, "enter");
         assert!(!fixture.shown(cx, "slash-menu"));
-        assert_eq!(fixture.texts(cx), vec!["/zzz".to_owned()]);
+        assert_eq!(fixture.texts(cx), vec!["/zzz".to_owned(), String::new()]);
         assert_eq!(fixture.kind(cx, block), Some(BlockKind::Text));
+        let caret = fixture.caret(cx).expect("caret");
+        assert_ne!(caret.block, block);
+        assert_eq!(caret.offset, 0);
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_disabled_item_keeps_the_menu_and_does_not_split(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "");
+        let fixture = open(cx, &doc, block);
+        fixture.input(cx, "/linked");
+        fixture.press(cx, "enter");
+        assert!(fixture.shown(cx, "slash-menu"));
+        assert_eq!(fixture.texts(cx), vec!["/linked".to_owned()]);
+    }
+
+    #[gpui_kit::test]
+    fn slash_inside_a_word_does_not_open_the_menu(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "");
+        let fixture = open(cx, &doc, block);
+        fixture.input(cx, "and/or");
+        assert_eq!(fixture.text(cx, block), "and/or");
+        assert!(!fixture.shown(cx, "slash-menu"));
+        fixture.input(cx, " see https://example.com");
+        assert_eq!(fixture.text(cx, block), "and/or see https://example.com");
+        assert!(!fixture.shown(cx, "slash-menu"));
+        fixture.press(cx, "enter");
+        assert_eq!(fixture.texts(cx).len(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn slash_after_a_space_opens_the_menu(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "");
+        let fixture = open(cx, &doc, block);
+        fixture.input(cx, "and /");
+        assert!(fixture.shown(cx, "slash-menu"));
+        fixture.input(cx, "h1");
+        fixture.press(cx, "enter");
+        assert_eq!(
+            fixture.kind(cx, block),
+            Some(BlockKind::Heading(HeadingLevel::One))
+        );
+        assert_eq!(fixture.text(cx, block), "and ");
+    }
+
+    #[gpui_kit::test]
+    fn slash_after_a_soft_break_opens_the_menu(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "line");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 4));
+        fixture.press(cx, "shift-enter");
+        fixture.input(cx, "/");
+        assert!(fixture.shown(cx, "slash-menu"));
+    }
+
+    #[gpui_kit::test]
+    fn slash_at_the_start_of_existing_text_opens_the_menu(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let block = doc.child(BlockKind::Text, "tail");
+        let fixture = Fixture::open(cx, &doc);
+        fixture.focus_at(cx, at(block, 0));
+        fixture.input(cx, "/");
+        assert!(fixture.shown(cx, "slash-menu"));
+        assert_eq!(fixture.text(cx, block), "/tail");
     }
 
     #[gpui_kit::test]

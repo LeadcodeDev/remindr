@@ -38,13 +38,25 @@ impl BlockEditor {
         cx: &mut Context<Self>,
     ) {
         let kind = self.kind_of(at.block, cx);
-        if text == "/" && !matches!(kind, Some(BlockKind::Code { .. }) | None) {
+        if text == "/" && self.slash_may_open(at, kind.as_ref(), cx) {
             self.open_slash(at, cx);
             return;
         }
         if kind == Some(BlockKind::Text) {
             self.apply_shortcut(window, cx);
         }
+    }
+
+    fn slash_may_open(&self, at: TextPoint, kind: Option<&BlockKind>, cx: &Context<Self>) -> bool {
+        if matches!(kind, Some(BlockKind::Code { .. }) | None) {
+            return false;
+        }
+        if at.offset == 0 {
+            return true;
+        }
+        self.plain_of(at.block, cx)
+            .and_then(|plain| plain.get(..at.offset)?.chars().next_back())
+            .is_some_and(char::is_whitespace)
     }
 
     fn apply_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -299,7 +299,7 @@ impl BlockEditor {
 
     pub(super) fn overlay_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         match self.overlay {
-            Some(Overlay::Slash(_)) => self.slash_confirm(window, cx),
+            Some(Overlay::Slash(_)) => return self.slash_confirm(window, cx),
             Some(Overlay::Picker(_)) => self.picker_confirm(window, cx),
             Some(Overlay::Link(_)) => self.link_commit(window, cx),
             None => return false,
