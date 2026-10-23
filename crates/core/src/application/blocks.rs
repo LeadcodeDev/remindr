@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::domain::{
     Block, BlockId, BlockKind, DomainError, Emoji, MarkChange, Operation, Parent, RichText,
-    SortKey, Timestamp, Transaction, Workspace,
+    SortKey, Span, Timestamp, Transaction, Workspace,
 };
 
 use super::{Built, Command, Created, DropTarget, TextPoint};
@@ -18,6 +18,7 @@ pub(crate) fn build(
         Command::InsertBlockAt { target, kind } => insert_block_at(workspace, *target, kind, now),
         Command::EditText { block, text } => edit_text(workspace, *block, text),
         Command::SplitBlock { at } => split_block(workspace, *at, now),
+        Command::PasteText { at, text } => paste_text(workspace, *at, text, now),
         Command::MergeWithPrevious { block } => merge_with_previous(workspace, *block),
         Command::DeleteRange { start, end } => delete_range(workspace, *start, *end),
         Command::SetMarks { start, end, change } => set_marks(workspace, *start, *end, change),
@@ -150,6 +151,89 @@ fn split_block(workspace: &Workspace, at: TextPoint, now: Timestamp) -> Result<B
     Ok(split_into(block, head, next))
 }
 
+fn paste_text(
+    workspace: &Workspace,
+    at: TextPoint,
+    pasted: &str,
+    now: Timestamp,
+) -> Result<Built, DomainError> {
+    let block = block_of(workspace, at.block)?;
+    if block.kind.is_atomic() {
+        return Err(DomainError::TextNotAllowed);
+    }
+    if matches!(block.kind, BlockKind::Page { .. }) {
+        return Err(DomainError::InvalidParent);
+    }
+    let normalized = pasted.replace("\r\n", "\n");
+    if normalized.is_empty() {
+        return Ok(Built::default());
+    }
+    let marks = block.text.marks_at(at.offset);
+    let (head, tail) = block.text.split_at(at.offset)?;
+    let piece = |line: &str| {
+        RichText::new([Span {
+            text: line.to_owned(),
+            marks: marks.clone(),
+        }])
+    };
+    let lines: Vec<&str> = if matches!(block.kind, BlockKind::Code { .. }) {
+        vec![normalized.as_str()]
+    } else {
+        normalized.split('\n').collect()
+    };
+    let Some((first, rest)) = lines.split_first() else {
+        return Ok(Built::default());
+    };
+    let Some((last, middle)) = rest.split_last() else {
+        let text = head.concat(&piece(first)).concat(&tail);
+        return Ok(Built {
+            transaction: set_text_if_changed(block, text),
+            caret: Some(TextPoint {
+                block: block.id,
+                offset: at.offset + first.len(),
+            }),
+            ..Built::default()
+        });
+    };
+    let kind = match &block.kind {
+        BlockKind::BulletedListItem | BlockKind::NumberedListItem => block.kind.clone(),
+        BlockKind::ToDo { .. } => BlockKind::ToDo { checked: false },
+        _ => BlockKind::Text,
+    };
+    let upper = next_key(workspace, block.parent, Some(&block.sort_key), &[]).cloned();
+    let mut previous_key = block.sort_key.clone();
+    let mut operations = set_text_if_changed(block, head.concat(&piece(first)))
+        .operations()
+        .to_vec();
+    let mut created = Vec::with_capacity(rest.len());
+    let texts = middle
+        .iter()
+        .map(|line| piece(line))
+        .chain(std::iter::once(piece(last).concat(&tail)));
+    for text in texts {
+        let sort_key = SortKey::between(Some(&previous_key), upper.as_ref());
+        let pasted_block = new_block(kind.clone(), block.parent, sort_key.clone(), text, now);
+        created.push(Created::Block(pasted_block.id));
+        operations.push(Operation::InsertBlock(pasted_block));
+        previous_key = sort_key;
+    }
+    let caret = created.last().map(|created| match created {
+        Created::Block(id) => TextPoint {
+            block: *id,
+            offset: last.len(),
+        },
+        Created::Database(_) | Created::View(_) => TextPoint {
+            block: block.id,
+            offset: at.offset,
+        },
+    });
+    Ok(Built {
+        transaction: Transaction::new(operations),
+        created,
+        caret,
+    })
+}
+
 fn split_into(block: &Block, head: RichText, next: Block) -> Built {
     let next_id = next.id;
     let mut operations = set_text_if_changed(block, head).operations().to_vec();
@@ -247,6 +331,9 @@ fn delete_range(
     } = select(workspace, from, to)?;
     let first_block = block_of(workspace, start.block)?;
     if first == last {
+        if holds_no_flow_text(&first_block.kind) {
+            return Ok(Built::default());
+        }
         let text = first_block.text.delete(start.offset..end.offset)?;
         return Ok(Built {
             transaction: set_text_if_changed(first_block, text),
@@ -257,8 +344,9 @@ fn delete_range(
     let last_block = block_of(workspace, end.block)?;
     let head = text_before(first_block, start.offset)?;
     let tail = text_after(last_block, end.offset)?;
-    let last_survives = first_block.kind.is_atomic() && !last_block.kind.is_atomic();
-    let removed_from = if first_block.kind.is_atomic() {
+    let last_survives =
+        holds_no_flow_text(&first_block.kind) && !holds_no_flow_text(&last_block.kind);
+    let removed_from = if holds_no_flow_text(&first_block.kind) {
         first
     } else {
         first + 1
@@ -291,7 +379,7 @@ fn delete_range(
     let (mut operations, caret) = if last_survives {
         let ops = set_text_if_changed(last_block, tail).operations().to_vec();
         (ops, Some(start_of(last_block.id)))
-    } else if first_block.kind.is_atomic() {
+    } else if holds_no_flow_text(&first_block.kind) {
         (Vec::new(), None)
     } else {
         let ops = set_text_if_changed(first_block, head.concat(&tail))
@@ -334,8 +422,12 @@ fn start_of(block: BlockId) -> TextPoint {
     TextPoint { block, offset: 0 }
 }
 
+fn holds_no_flow_text(kind: &BlockKind) -> bool {
+    kind.is_atomic() || matches!(kind, BlockKind::Page { .. })
+}
+
 fn text_before(block: &Block, offset: usize) -> Result<RichText, DomainError> {
-    if block.kind.is_atomic() {
+    if holds_no_flow_text(&block.kind) {
         Ok(RichText::default())
     } else {
         block.text.split_at(offset).map(|(head, _)| head)
@@ -343,7 +435,7 @@ fn text_before(block: &Block, offset: usize) -> Result<RichText, DomainError> {
 }
 
 fn text_after(block: &Block, offset: usize) -> Result<RichText, DomainError> {
-    if block.kind.is_atomic() {
+    if holds_no_flow_text(&block.kind) {
         Ok(RichText::default())
     } else {
         block.text.split_at(offset).map(|(_, tail)| tail)
@@ -394,7 +486,7 @@ fn indent(workspace: &Workspace, id: BlockId) -> Result<Built, DomainError> {
         .take_while(|sibling| sibling.id != id)
         .last()
         .ok_or(DomainError::InvalidParent)?;
-    if !previous.kind.accepts_children() {
+    if !previous.kind.accepts_children() || matches!(previous.kind, BlockKind::Page { .. }) {
         return Err(DomainError::ChildrenNotAllowed);
     }
     let target = Parent::Block(previous.id);
@@ -2873,5 +2965,158 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn paste_of_one_line_inserts_at_the_caret_with_its_marks() {
+        let mut workspace = notes(vec![block(2, BlockKind::Text, under(1), 1, "Helo")]);
+        let built = run(
+            &mut workspace,
+            Command::PasteText {
+                at: at(2, 3),
+                text: "l".to_owned(),
+            },
+        );
+        assert_eq!(text_of(&workspace, 2), "Hello");
+        assert_eq!(built.caret, Some(at(2, 4)));
+        assert!(built.created.is_empty());
+    }
+
+    #[test]
+    fn paste_of_three_lines_creates_two_blocks_and_moves_the_tail() {
+        let mut workspace = notes(vec![
+            block(2, BlockKind::BulletedListItem, under(1), 1, "abXY"),
+            block(3, BlockKind::Text, under(1), 2, "after"),
+        ]);
+        let built = run(
+            &mut workspace,
+            Command::PasteText {
+                at: at(2, 2),
+                text: "one\r\ntwo\nthree".to_owned(),
+            },
+        );
+        assert_eq!(
+            texts(&workspace, under(1)),
+            vec!["abone", "two", "threeXY", "after"]
+        );
+        let kinds: Vec<BlockKind> = workspace
+            .children(under(1))
+            .map(|block| block.kind.clone())
+            .collect();
+        assert_eq!(kinds[1], BlockKind::BulletedListItem);
+        assert_eq!(built.created.len(), 2);
+        let last = ids(&workspace, under(1))[2];
+        assert_eq!(built.caret, Some(at_block(last, 5)));
+    }
+
+    #[test]
+    fn paste_into_a_code_block_keeps_the_newlines_inside() {
+        let mut workspace = notes(vec![block(
+            2,
+            BlockKind::Code {
+                language: CodeLanguage::plain_text(),
+            },
+            under(1),
+            1,
+            "",
+        )]);
+        run(
+            &mut workspace,
+            Command::PasteText {
+                at: at(2, 0),
+                text: "fn a() {}\nfn b() {}".to_owned(),
+            },
+        );
+        assert_eq!(text_of(&workspace, 2), "fn a() {}\nfn b() {}");
+        assert_eq!(ids(&workspace, under(1)).len(), 1);
+    }
+
+    #[test]
+    fn paste_into_an_atomic_block_is_text_not_allowed() {
+        let mut workspace = notes(vec![block(2, BlockKind::Divider, under(1), 1, "")]);
+        let error = rejection(
+            &mut workspace,
+            Command::PasteText {
+                at: at(2, 0),
+                text: "x".to_owned(),
+            },
+        );
+        assert_eq!(error, DomainError::TextNotAllowed);
+    }
+
+    #[test]
+    fn empty_paste_changes_nothing() {
+        let mut workspace = notes(vec![block(2, BlockKind::Text, under(1), 1, "abc")]);
+        let built = run(
+            &mut workspace,
+            Command::PasteText {
+                at: at(2, 1),
+                text: String::new(),
+            },
+        );
+        assert!(built.transaction.is_empty());
+    }
+
+    #[test]
+    fn delete_range_ending_on_a_sub_page_link_kills_it_and_keeps_its_title() {
+        let mut workspace = notes(vec![
+            block(2, BlockKind::Text, under(1), 1, "hello"),
+            block(3, page(), under(1), 2, "Sub"),
+            block(4, BlockKind::Text, under(3), 1, "inside"),
+        ]);
+        run(
+            &mut workspace,
+            Command::DeleteRange {
+                start: at(2, 0),
+                end: at(3, 0),
+            },
+        );
+        assert_eq!(text_of(&workspace, 2), "");
+        assert_eq!(text_of(&workspace, 3), "Sub");
+        assert!(!alive(&workspace, 3));
+        assert!(!alive(&workspace, 4));
+    }
+
+    #[test]
+    fn delete_range_starting_on_a_sub_page_link_keeps_the_tail_of_the_text() {
+        let mut workspace = notes(vec![
+            block(2, page(), under(1), 1, "Sub"),
+            block(3, BlockKind::Text, under(1), 2, "text"),
+        ]);
+        let built = run(
+            &mut workspace,
+            Command::DeleteRange {
+                start: at(2, 0),
+                end: at(3, 2),
+            },
+        );
+        assert_eq!(text_of(&workspace, 2), "Sub");
+        assert!(!alive(&workspace, 2));
+        assert_eq!(text_of(&workspace, 3), "xt");
+        assert_eq!(built.caret, Some(at(3, 0)));
+    }
+
+    #[test]
+    fn delete_range_inside_a_sub_page_link_changes_nothing() {
+        let mut workspace = notes(vec![block(2, page(), under(1), 1, "Sub")]);
+        let built = run(
+            &mut workspace,
+            Command::DeleteRange {
+                start: at(2, 0),
+                end: at(2, 3),
+            },
+        );
+        assert!(built.transaction.is_empty());
+        assert_eq!(text_of(&workspace, 2), "Sub");
+    }
+
+    #[test]
+    fn indent_under_a_sub_page_link_is_rejected() {
+        let mut workspace = notes(vec![
+            block(2, page(), under(1), 1, "Sub"),
+            block(3, BlockKind::Text, under(1), 2, "B"),
+        ]);
+        let error = rejection(&mut workspace, Command::Indent { block: id(3) });
+        assert_eq!(error, DomainError::ChildrenNotAllowed);
     }
 }
