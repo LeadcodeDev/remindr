@@ -66,6 +66,11 @@ fn midpoint(lower: &[u8], upper: Option<&[u8]>) -> Vec<u8> {
     let upper_digit = upper
         .and_then(|digits| digits.first().copied())
         .unwrap_or(BASE);
+    if upper_digit <= lower_digit {
+        let mut result = lower.to_vec();
+        result.extend(midpoint(&[], None));
+        return result;
+    }
     if upper_digit - lower_digit > 1 {
         return vec![(lower_digit + upper_digit).div_ceil(2)];
     }
@@ -105,6 +110,18 @@ mod tests {
         let below = SortKey::between(None, Some(&low));
         assert!(below < low);
         assert!(SortKey::parse(below.as_str()).is_ok());
+    }
+
+    #[test]
+    fn misordered_bounds_fall_back_to_a_key_after_the_lower_bound() {
+        let high = SortKey::parse("b").unwrap();
+        let low = SortKey::parse("a").unwrap();
+        let reversed = SortKey::between(Some(&high), Some(&low));
+        assert!(reversed > high);
+        let same = SortKey::between(Some(&low), Some(&low));
+        assert!(same > low);
+        assert!(SortKey::parse(reversed.as_str()).is_ok());
+        assert!(SortKey::parse(same.as_str()).is_ok());
     }
 
     proptest! {

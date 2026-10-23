@@ -15,7 +15,7 @@ thiserror = "2"
 anyhow = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 gpui-kit = "=0.8.0"
 proptest = "1.12"
 cucumber = "0.23"

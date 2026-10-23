@@ -42,4 +42,6 @@ pub enum DomainError {
     AlreadyExists,
     #[error("still referenced by other records")]
     StillReferenced,
+    #[error("this block kind holds no text")]
+    TextNotAllowed,
 }
