@@ -25,4 +25,5 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo nextest run --workspace --no-tests=pass
       - run: cargo test --doc --workspace
-      - run: "! cargo tree -p remindr-desktop -e normal | grep -E ' (reqwest|hyper|ureq|isahc) v'"
+      - run: cargo tree -p remindr-desktop -e normal > dependency-tree.txt
+      - run: "! grep -E ' (reqwest|hyper|ureq|isahc) v' dependency-tree.txt"

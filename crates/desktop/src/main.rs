@@ -1,5 +1,3 @@
-#![expect(dead_code)]
-
 mod app;
 mod database;
 mod editor;

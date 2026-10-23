@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 
-use gpui_kit::base::text::editor_host::{BlockNode, RenderContext};
+use gpui_kit::base::text::editor_host::BlockNode;
 use gpui_kit::{
     AnyView, App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement,
-    Pixels, Render, ScrollHandle, SharedString, Subscription, TestSupportExt, Window, div,
+    Pixels, Point, Render, ScrollHandle, SharedString, Subscription, TestSupportExt, Window, div,
     prelude::*, px,
 };
 use remindr_core::application::{Changes, TextPoint};
@@ -14,27 +14,43 @@ use remindr_core::domain::{Block, BlockId, BlockKind, HeadingLevel, Parent};
 
 use crate::app::{NavigatorHandle, Route, WorkspaceModel};
 use crate::embed::EmbedRegistry;
+use crate::theme::BODY_TEXT;
 
 mod actions;
+#[cfg(test)]
+mod bench;
 mod caret;
 mod clipboard;
+mod cull;
+mod deletion;
+mod drag;
 mod editing;
 mod element;
+mod format;
 mod frame;
 mod input;
+mod link;
 mod navigation;
+mod overlay;
 mod palette;
 mod render;
 mod rows;
+mod shortcuts;
+mod slash;
 #[cfg(test)]
 mod testing;
 mod text;
+mod timing;
 #[cfg(test)]
 mod ui_tests;
 
 use caret::{Blink, Marked, Selection, floor_boundary};
+use cull::{Class, Entry, Heights, SETTLED, Slot, Viewport};
+use drag::DropMark;
 use element::EditorRoot;
+use format::Pending;
 use frame::{CARET_WIDTH, Frame, leaf_key};
+use overlay::Overlay;
 use palette::Palette;
 use render::{RowBounds, RowEnv, RowKind, RowSpec, icon_of};
 use rows::{Expansion, Extent, Row, extent, position, rows};
@@ -58,14 +74,35 @@ pub struct BlockEditor {
     embeds: HashMap<BlockId, AnyView>,
     reveal: Cell<bool>,
     own_events: usize,
+    heights: RefCell<Heights>,
+    fallback_height: Cell<Pixels>,
+    settling: Cell<u8>,
+    first_paint: timing::FirstPaint,
+    layout_changed: Cell<bool>,
+    revealed: Cell<Option<Pixels>>,
+    anchor: Cell<Option<(BlockId, usize, Pixels)>>,
+    drag_block: Cell<Option<BlockId>>,
+    pointer: Cell<Option<Point<Pixels>>>,
+    drop: Cell<Option<DropMark>>,
+    overlay: Option<Overlay>,
+    pending: Option<Pending>,
     _subscriptions: Vec<Subscription>,
+}
+
+enum Layout {
+    Row,
+    Held(Pixels),
+    Gap(Pixels),
 }
 
 struct Snapshot {
     specs: Vec<RowSpec>,
+    layout: Vec<Layout>,
     decorations: HashMap<u64, Vec<(Range<usize>, Hsla)>>,
     blocks: Vec<BlockId>,
 }
+
+const CONTENT_LEAD: Pixels = px(8.);
 
 pub fn init(cx: &mut App) {
     actions::bind(cx);
@@ -93,6 +130,7 @@ impl BlockEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let first_paint = timing::FirstPaint::start();
         let focus = cx.focus_handle();
         let blink = cx.new(|_| Blink::new());
         let subscriptions = vec![
@@ -101,6 +139,7 @@ impl BlockEditor {
             cx.subscribe_in(&model, window, Self::on_changes),
             cx.on_blur(&focus, window, |this, window, cx| {
                 this.commit_marked(window, cx);
+                this.dismiss_overlay(cx);
                 this.blink.update(cx, |blink, cx| blink.stop(cx));
             }),
         ];
@@ -125,6 +164,18 @@ impl BlockEditor {
             embeds: HashMap::new(),
             reveal: Cell::new(false),
             own_events: 0,
+            heights: RefCell::default(),
+            fallback_height: Cell::new(px(800.)),
+            settling: Cell::new(0),
+            first_paint,
+            layout_changed: Cell::new(false),
+            revealed: Cell::new(None),
+            anchor: Cell::new(None),
+            drag_block: Cell::new(None),
+            pointer: Cell::new(None),
+            drop: Cell::new(None),
+            overlay: None,
+            pending: None,
             _subscriptions: subscriptions,
         }
     }
@@ -186,7 +237,10 @@ impl BlockEditor {
         self.selection = selection;
         self.goal_x = None;
         self.reveal.set(true);
+        self.revealed.set(None);
         self.blink.update(cx, |blink, cx| blink.restart(cx));
+        self.pending = None;
+        self.sync_slash(cx);
         cx.notify();
     }
 
@@ -273,14 +327,28 @@ impl BlockEditor {
             })
     }
 
+    fn finish_reveal(&self) {
+        self.reveal.set(false);
+        self.revealed.set(None);
+    }
+
     fn reveal_caret(&self, window: &mut Window) {
         if !self.reveal.get() {
             return;
         }
         let Some(selection) = self.selection else {
-            self.reveal.set(false);
+            self.finish_reveal();
             return;
         };
+        let mut offset = self.scroll.offset();
+        if self
+            .revealed
+            .get()
+            .is_some_and(|expected| expected != offset.y)
+        {
+            self.finish_reveal();
+            return;
+        }
         let caret = self.frame.borrow().caret_bounds(
             selection.head.block,
             selection.head.offset,
@@ -289,18 +357,91 @@ impl BlockEditor {
         let Some(caret) = caret else {
             return;
         };
-        self.reveal.set(false);
         let view: Bounds<Pixels> = self.scroll.bounds();
-        let mut offset = self.scroll.offset();
         if caret.top() < view.top() {
             offset.y += view.top() - caret.top();
         } else if caret.bottom() > view.bottom() {
             offset.y -= caret.bottom() - view.bottom();
         } else {
+            if self.layout_changed.get() {
+                window.refresh();
+            } else {
+                self.finish_reveal();
+            }
             return;
         }
         self.scroll.set_offset(offset);
+        self.revealed.set(Some(offset.y));
         window.refresh();
+    }
+
+    fn viewport_height(&self) -> Pixels {
+        let measured = self.scroll.bounds().size.height;
+        if measured > px(0.) {
+            measured
+        } else {
+            self.fallback_height.get()
+        }
+    }
+
+    fn pinned_blocks(&self) -> Vec<BlockId> {
+        let mut pinned = Vec::new();
+        if let Some(selection) = self.selection {
+            pinned.push(selection.head.block);
+            pinned.push(selection.anchor.block);
+        }
+        if let Some(marked) = &self.marked {
+            pinned.push(marked.block);
+        }
+        if let Some(block) = self.drag_block.get() {
+            pinned.push(block);
+        }
+        pinned.extend(self.overlay_blocks());
+        pinned
+    }
+
+    fn settle_culling(&self, window: &mut Window) {
+        if !self.uncovered() {
+            self.settling.set(0);
+            return;
+        }
+        if self.settling.get() < 3 {
+            self.settling.set(self.settling.get() + 1);
+            window.refresh();
+        }
+    }
+
+    fn uncovered(&self) -> bool {
+        let frame = self.frame.borrow();
+        let rows = frame.rows();
+        let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+            return false;
+        };
+        let view = self.scroll.bounds();
+        let above = first.1.top() > view.top() + px(1.) && self.order.first() != Some(&first.0);
+        let below = last.1.bottom() < view.bottom() - px(1.) && self.order.last() != Some(&last.0);
+        above || below
+    }
+
+    fn keep_anchor(&self, entries: &[Entry]) {
+        let Some((block, index, previous)) = self.anchor.get() else {
+            return;
+        };
+        let Some((now_index, now)) =
+            cull::top_of(entries, &self.heights.borrow(), CONTENT_LEAD, block)
+        else {
+            return;
+        };
+        let shift = now - previous;
+        if now_index != index || shift.abs() <= SETTLED {
+            return;
+        }
+        let mut offset = self.scroll.offset();
+        offset.y = (offset.y - shift).min(px(0.));
+        self.scroll.set_offset(offset);
+        if self.revealed.get().is_some() {
+            self.revealed.set(Some(offset.y));
+        }
     }
 
     fn snapshot(&self, palette: &Palette, cx: &App) -> Snapshot {
@@ -310,9 +451,44 @@ impl BlockEditor {
             .selection
             .filter(|_| self.marked.is_none())
             .and_then(|selection| extent(&rows, selection.anchor, selection.head));
-        let mut specs = Vec::with_capacity(rows.len());
+        let entries: Vec<Entry> = rows
+            .iter()
+            .map(|row| Entry {
+                block: row.block,
+                class: workspace
+                    .block(row.block)
+                    .map_or(Class::Text, |block| Class::of(&block.kind)),
+            })
+            .collect();
+        self.keep_anchor(&entries);
+        let viewport = Viewport {
+            top: (-self.scroll.offset().y).max(px(0.)),
+            height: self.viewport_height(),
+        };
+        let plan = cull::plan(
+            &entries,
+            &self.heights.borrow(),
+            CONTENT_LEAD,
+            viewport,
+            &self.pinned_blocks(),
+        );
+        self.anchor.set(
+            plan.anchor
+                .map(|anchor| (entries[anchor.index].block, anchor.index, anchor.top)),
+        );
+        let mut specs = Vec::new();
+        let mut layout = Vec::with_capacity(plan.slots.len());
         let mut decorations: HashMap<u64, Vec<(Range<usize>, Hsla)>> = HashMap::new();
-        for (index, row) in rows.iter().enumerate() {
+        for slot in plan.slots {
+            let (index, held) = match slot {
+                Slot::Gap { height, .. } => {
+                    layout.push(Layout::Gap(height));
+                    continue;
+                }
+                Slot::Row(index) => (index, None),
+                Slot::Held { index, height } => (index, Some(height)),
+            };
+            let row = &rows[index];
             let Some(block) = workspace.block(row.block) else {
                 continue;
             };
@@ -325,18 +501,24 @@ impl BlockEditor {
                     .or_default()
                     .push((part, palette.selection));
             }
+            layout.push(held.map_or(Layout::Row, Layout::Held));
             specs.push(RowSpec {
                 row: *row,
                 kind: RowKind::of(&block.kind),
                 icon: icon_of(&block.kind),
                 node: self.node_of(block, palette, key),
                 title: title_of(block),
+                label: SharedString::from(drag::preview_label(
+                    &block.text.to_plain(),
+                    label_fallback(&block.kind),
+                )),
                 selected: atomic && inside,
                 open: self.expanded.contains(&block.id),
             });
         }
         Snapshot {
             specs,
+            layout,
             decorations,
             blocks: rows.iter().map(|row| row.block).collect(),
         }
@@ -385,8 +567,9 @@ impl BlockEditor {
         if !cx.has_global::<EmbedRegistry>() {
             return None;
         }
+        let model = self.model.clone();
         let view = cx.update_global::<EmbedRegistry, _>(|registry, cx| {
-            registry.build(block, database, window, cx)
+            registry.build(model, block, database, window, cx)
         })?;
         self.embeds.insert(block, view.clone());
         Some(view)
@@ -408,6 +591,15 @@ fn selected_part(span: Option<Extent>, index: usize, length: usize) -> Option<Ra
     (from < to).then_some(from..to)
 }
 
+fn label_fallback(kind: &BlockKind) -> &'static str {
+    match kind {
+        BlockKind::Divider => "Divider",
+        BlockKind::DatabaseView { .. } => "Database",
+        BlockKind::Page { .. } => "Untitled",
+        _ => "Empty block",
+    }
+}
+
 fn title_of(block: &Block) -> SharedString {
     match block.kind {
         BlockKind::Page { .. } if block.text.is_empty() => SharedString::from("Untitled"),
@@ -425,17 +617,19 @@ impl Focusable for BlockEditor {
 impl Render for BlockEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Palette::of(cx);
-        let context = RenderContext::from_app(cx)
-            .with_body_font_size(px(16.))
+        let context = render::render_context(cx)
             .on_link_click(|_, _, _, _| {})
             .with_code_block_highlighter(|_| Vec::new());
+        self.fallback_height.set(window.viewport_size().height);
         let Snapshot {
             specs,
+            layout,
             decorations,
             blocks,
         } = self.snapshot(&palette, cx);
         let alive: HashSet<BlockId> = blocks.iter().copied().collect();
         self.embeds.retain(|block, _| alive.contains(block));
+        self.heights.borrow_mut().forget_except(&alive);
         self.order = blocks;
         self.row_bounds.borrow_mut().clear();
         let editor = cx.entity();
@@ -446,15 +640,42 @@ impl Render for BlockEditor {
             palette: &palette,
             context: &context,
         };
-        let mut elements = Vec::with_capacity(specs.len());
-        for spec in specs {
-            let embed = self.embed(&spec, window, cx);
-            elements.push(render::row(spec, embed, &env, window, cx));
+        let mut elements = Vec::with_capacity(layout.len());
+        let mut specs = specs.into_iter();
+        for piece in layout {
+            match piece {
+                Layout::Row => {
+                    let Some(spec) = specs.next() else {
+                        continue;
+                    };
+                    let embed = self.embed(&spec, window, cx);
+                    elements.push(render::row(spec, embed, &env, window, cx));
+                }
+                Layout::Held(height) => {
+                    let Some(spec) = specs.next() else {
+                        continue;
+                    };
+                    let embed = self.embed(&spec, window, cx);
+                    let row = render::row(spec, embed, &env, window, cx);
+                    elements.push(
+                        div()
+                            .w_full()
+                            .h(height)
+                            .flex_none()
+                            .overflow_hidden()
+                            .child(row)
+                            .into_any_element(),
+                    );
+                }
+                Layout::Gap(height) => {
+                    elements.push(div().w_full().h(height).flex_none().into_any_element())
+                }
+            }
         }
         let content = div()
             .w_full()
             .min_h_full()
-            .pt(px(8.))
+            .pt(CONTENT_LEAD)
             .pb(px(160.))
             .children(elements)
             .into_any_element();
@@ -467,14 +688,15 @@ impl Render for BlockEditor {
             .size_full()
             .cursor_text()
             .overflow_y_scroll()
-            .text_size(px(16.))
+            .text_size(BODY_TEXT)
             .text_color(palette.foreground)
             .child(EditorRoot {
                 editor: editor.clone(),
                 child: Some(content),
                 decorations,
                 palette,
-            });
-        actions::handle(root, cx)
+            })
+            .children(self.overlay_element(&editor, &palette, window, cx));
+        drag::handle(actions::handle(root, cx), cx)
     }
 }

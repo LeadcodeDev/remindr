@@ -16,6 +16,7 @@ impl BlockEditor {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        self.dismiss_overlay(cx);
         self.commit_marked(window, cx);
         if self.visible_rows(cx).is_empty() {
             self.first_block(window, cx);
@@ -26,6 +27,12 @@ impl BlockEditor {
             return;
         };
         let at = hit.point();
+        if event.modifiers.secondary()
+            && let Hit::Text(text_point) = hit
+            && self.open_link_under(text_point, event.position, cx)
+        {
+            return;
+        }
         self.dragging = true;
         if event.modifiers.shift {
             let anchor = self.selection.map_or(at, |selection| selection.anchor);

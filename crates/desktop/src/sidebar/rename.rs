@@ -1,15 +1,17 @@
 use std::cell::Cell;
 
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::{App, AppContext as _, Entity, ParentElement as _, Window, px};
+use gpui_kit::{App, AppContext as _, Entity, ParentElement as _, Styled as _, Window, px};
 use remindr_core::application::Command;
 use remindr_core::domain::{BlockId, DatabaseId, RichText};
 
 use crate::app::WorkspaceModel;
 use crate::app::commands;
+use crate::theme::{UI_TEXT, labeled};
 
 #[derive(Clone, Copy)]
 pub enum RenameTarget {
@@ -58,14 +60,22 @@ pub fn open(
         dialog
             .title(target.title())
             .w(px(420.))
-            .child(Input::new(&input).id("rename-input"))
+            .child(
+                Input::new(&input)
+                    .id("rename-input")
+                    .small()
+                    .text_size(UI_TEXT),
+            )
             .footer(
                 DialogFooter::new()
-                    .child(DialogClose::new().child(Button::new("rename-cancel").label("Cancel")))
                     .child(
-                        DialogAction::new()
-                            .child(Button::new("rename-ok").primary().label("Rename")),
-                    ),
+                        DialogClose::new()
+                            .child(labeled(Button::new("rename-cancel").small(), "Cancel")),
+                    )
+                    .child(DialogAction::new().child(labeled(
+                        Button::new("rename-ok").primary().small(),
+                        "Rename",
+                    ))),
             )
             .on_ok(move |_, window, cx| {
                 let name = confirm_input.read(cx).value();

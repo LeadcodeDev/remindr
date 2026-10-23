@@ -61,7 +61,7 @@ impl BlockEditor {
     }
 
     pub(super) fn type_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if text.is_empty() {
+        if text.is_empty() || self.modal_text(text, cx) {
             return;
         }
         let Some(at) = self.insertion_point(window, cx) else {
@@ -90,6 +90,7 @@ impl BlockEditor {
             },
             cx,
         );
+        self.after_typed(at, text, window, cx);
         true
     }
 
@@ -98,7 +99,10 @@ impl BlockEditor {
         if is_atomic_row(&block.kind) {
             return None;
         }
-        let marks = block.text.marks_at(at.offset);
+        let marks = match &self.pending {
+            Some(pending) if pending.at == at => pending.marks.clone(),
+            _ => block.text.marks_at(at.offset),
+        };
         let edited = block.text.insert(at.offset, text, &marks).ok()?;
         Some(Command::EditText {
             block: at.block,
@@ -253,7 +257,7 @@ impl BlockEditor {
         }
     }
 
-    fn delete_text(
+    pub(super) fn delete_text(
         &mut self,
         block: BlockId,
         range: std::ops::Range<usize>,
@@ -282,7 +286,12 @@ impl BlockEditor {
         }
     }
 
-    fn delete_atomic(&mut self, block: BlockId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn delete_atomic(
+        &mut self,
+        block: BlockId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let rows = self.visible_rows(cx);
         let index = position(&rows, block);
         let neighbor = index.and_then(|index| {
@@ -366,7 +375,7 @@ impl BlockEditor {
         }
     }
 
-    fn open_parent_toggle(&mut self, block: BlockId, cx: &mut Context<Self>) {
+    pub(super) fn open_parent_toggle(&mut self, block: BlockId, cx: &mut Context<Self>) {
         let parent = self.block(block, cx).map(|found| found.parent);
         if let Some(Parent::Block(owner)) = parent
             && matches!(self.kind_of(owner, cx), Some(BlockKind::Toggle))
