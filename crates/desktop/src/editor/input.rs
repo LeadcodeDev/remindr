@@ -135,6 +135,11 @@ impl BlockEditor {
                 },
                 cx,
             );
+            let at = TextPoint {
+                block,
+                offset: start,
+            };
+            self.after_typed(at, text, window, cx);
         }
     }
 
@@ -221,6 +226,9 @@ impl EntityInputHandler for BlockEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.modal_text(text, cx) {
+            return;
+        }
         if let Some(marked) = self.marked.take() {
             self.commit_composition(marked, text, window, cx);
             return;
@@ -243,6 +251,9 @@ impl EntityInputHandler for BlockEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.modal() {
+            return;
+        }
         if new_text.is_empty() {
             self.marked = None;
             cx.notify();

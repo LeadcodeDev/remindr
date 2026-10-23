@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use gpui_kit::base::text::editor_host::LeafGeometry;
-use gpui_kit::{Bounds, Pixels, Point, point, size};
+use gpui_kit::{Bounds, Pixels, Point, point, px, size};
 use remindr_core::application::TextPoint;
 use remindr_core::domain::BlockId;
 
@@ -44,6 +44,10 @@ impl Frame {
         self.leaves.get(&block)
     }
 
+    pub fn rows(&self) -> &[(BlockId, Bounds<Pixels>)] {
+        &self.rows
+    }
+
     pub fn hit(&self, at: Point<Pixels>) -> Option<Hit> {
         let last = self.rows.len().checked_sub(1)?;
         let index = self
@@ -74,6 +78,12 @@ impl Frame {
             point(origin.x, origin.y + inset),
             size(width, height),
         ))
+    }
+
+    pub fn line_box(&self, block: BlockId, offset: usize) -> Option<Bounds<Pixels>> {
+        let leaf = self.leaves.get(&block)?;
+        let origin = leaf.position_for_index(offset.min(leaf.len()));
+        Some(Bounds::new(origin, size(px(1.), leaf.line_height())))
     }
 
     pub fn line_edges(&self, block: BlockId, offset: usize, text: &str) -> Option<(usize, usize)> {

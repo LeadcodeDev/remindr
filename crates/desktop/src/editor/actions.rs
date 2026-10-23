@@ -1,5 +1,6 @@
-use gpui_kit::{App, Context, InteractiveElement, KeyBinding, actions};
+use gpui_kit::{Action, App, Context, InteractiveElement, KeyBinding, Window, actions};
 
+use super::format::Mark;
 use super::{BlockEditor, KEY_CONTEXT};
 
 actions!(
@@ -34,6 +35,16 @@ actions!(
         Copy,
         Cut,
         Paste,
+        Escape,
+        DeleteWordBackward,
+        DeleteWordForward,
+        DeleteLineBackward,
+        ToggleBold,
+        ToggleItalic,
+        ToggleUnderline,
+        ToggleStrikethrough,
+        ToggleCode,
+        EditLink,
     ]
 );
 
@@ -48,6 +59,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("enter", Enter, context),
+        KeyBinding::new("escape", Escape, context),
         KeyBinding::new("shift-enter", SoftBreak, context),
         KeyBinding::new("secondary-enter", InsertBelow, context),
         KeyBinding::new("tab", Indent, context),
@@ -74,6 +86,14 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("secondary-c", Copy, context),
         KeyBinding::new("secondary-x", Cut, context),
         KeyBinding::new("secondary-v", Paste, context),
+        KeyBinding::new(&format!("{word}-backspace"), DeleteWordBackward, context),
+        KeyBinding::new(&format!("{word}-delete"), DeleteWordForward, context),
+        KeyBinding::new("secondary-b", ToggleBold, context),
+        KeyBinding::new("secondary-i", ToggleItalic, context),
+        KeyBinding::new("secondary-u", ToggleUnderline, context),
+        KeyBinding::new("secondary-shift-s", ToggleStrikethrough, context),
+        KeyBinding::new("secondary-e", ToggleCode, context),
+        KeyBinding::new("secondary-k", EditLink, context),
     ];
     if cfg!(target_os = "macos") {
         bindings.extend([
@@ -81,6 +101,7 @@ pub fn bind(cx: &mut App) {
             KeyBinding::new("cmd-right", MoveEnd, context),
             KeyBinding::new("cmd-shift-left", SelectHome, context),
             KeyBinding::new("cmd-shift-right", SelectEnd, context),
+            KeyBinding::new("cmd-backspace", DeleteLineBackward, context),
         ]);
     } else {
         bindings.push(KeyBinding::new("ctrl-y", Redo, context));
@@ -88,112 +109,134 @@ pub fn bind(cx: &mut App) {
     cx.bind_keys(bindings);
 }
 
+type Run = fn(&mut BlockEditor, &mut Window, &mut Context<BlockEditor>);
+
+trait Acts: InteractiveElement + Sized {
+    fn act<A: Action>(self, cx: &mut Context<BlockEditor>, run: Run) -> Self {
+        self.on_action(cx.listener(move |this, _: &A, window, cx| {
+            if this.modal() {
+                return;
+            }
+            this.commit_marked(window, cx);
+            run(this, window, cx);
+        }))
+    }
+
+    fn format<A: Action>(self, cx: &mut Context<BlockEditor>, run: Run) -> Self {
+        self.on_action(cx.listener(move |this, _: &A, window, cx| {
+            if !this.focus.is_focused(window) {
+                cx.propagate();
+                return;
+            }
+            if this.modal() {
+                return;
+            }
+            this.commit_marked(window, cx);
+            run(this, window, cx);
+        }))
+    }
+}
+
+impl<E: InteractiveElement> Acts for E {}
+
 pub fn handle<E: InteractiveElement>(root: E, cx: &mut Context<BlockEditor>) -> E {
     root.on_action(cx.listener(|this, _: &Backspace, window, cx| {
         this.commit_marked(window, cx);
+        if this.modal_backspace(cx) {
+            return;
+        }
         this.backspace(window, cx);
     }))
-    .on_action(cx.listener(|this, _: &Delete, window, cx| {
-        this.commit_marked(window, cx);
-        this.delete_forward(window, cx);
-    }))
+    .act::<Delete>(cx, |this, window, cx| this.delete_forward(window, cx))
     .on_action(cx.listener(|this, _: &Enter, window, cx| {
         this.commit_marked(window, cx);
+        if this.overlay_enter(window, cx) {
+            return;
+        }
         this.enter(window, cx);
     }))
-    .on_action(cx.listener(|this, _: &SoftBreak, window, cx| {
-        this.commit_marked(window, cx);
-        this.type_text("\n", window, cx);
+    .on_action(cx.listener(|this, _: &Escape, _, cx| {
+        if !this.dismiss_overlay(cx) {
+            cx.propagate();
+        }
     }))
-    .on_action(cx.listener(|this, _: &InsertBelow, window, cx| {
-        this.commit_marked(window, cx);
-        this.insert_below(window, cx);
-    }))
-    .on_action(cx.listener(|this, _: &Indent, window, cx| {
-        this.commit_marked(window, cx);
-        this.indent(window, cx);
-    }))
-    .on_action(cx.listener(|this, _: &Outdent, window, cx| {
-        this.commit_marked(window, cx);
-        this.outdent(window, cx);
-    }))
-    .on_action(cx.listener(|this, _: &MoveLeft, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(false, false, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &MoveRight, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(true, false, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectLeft, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(false, false, true, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectRight, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(true, false, true, cx);
-    }))
-    .on_action(cx.listener(|this, _: &MoveWordLeft, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(false, true, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &MoveWordRight, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(true, true, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectWordLeft, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(false, true, true, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectWordRight, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_horizontal(true, true, true, cx);
-    }))
+    .act::<SoftBreak>(cx, |this, window, cx| this.type_text("\n", window, cx))
+    .act::<InsertBelow>(cx, |this, window, cx| this.insert_below(window, cx))
+    .act::<Indent>(cx, |this, window, cx| this.indent(window, cx))
+    .act::<Outdent>(cx, |this, window, cx| this.outdent(window, cx))
+    .act::<MoveLeft>(cx, |this, _, cx| {
+        this.step_horizontal(false, false, false, cx)
+    })
+    .act::<MoveRight>(cx, |this, _, cx| {
+        this.step_horizontal(true, false, false, cx)
+    })
+    .act::<SelectLeft>(cx, |this, _, cx| {
+        this.step_horizontal(false, false, true, cx)
+    })
+    .act::<SelectRight>(cx, |this, _, cx| {
+        this.step_horizontal(true, false, true, cx)
+    })
+    .act::<MoveWordLeft>(cx, |this, _, cx| {
+        this.step_horizontal(false, true, false, cx)
+    })
+    .act::<MoveWordRight>(cx, |this, _, cx| {
+        this.step_horizontal(true, true, false, cx)
+    })
+    .act::<SelectWordLeft>(cx, |this, _, cx| {
+        this.step_horizontal(false, true, true, cx)
+    })
+    .act::<SelectWordRight>(cx, |this, _, cx| this.step_horizontal(true, true, true, cx))
     .on_action(cx.listener(|this, _: &MoveUp, window, cx| {
         this.commit_marked(window, cx);
+        if this.overlay_step(false, cx) {
+            return;
+        }
         this.step_vertical(false, false, cx);
     }))
     .on_action(cx.listener(|this, _: &MoveDown, window, cx| {
         this.commit_marked(window, cx);
+        if this.overlay_step(true, cx) {
+            return;
+        }
         this.step_vertical(true, false, cx);
     }))
-    .on_action(cx.listener(|this, _: &SelectUp, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_vertical(false, true, cx);
+    .act::<SelectUp>(cx, |this, _, cx| this.step_vertical(false, true, cx))
+    .act::<SelectDown>(cx, |this, _, cx| this.step_vertical(true, true, cx))
+    .act::<MoveHome>(cx, |this, _, cx| this.step_line_edge(false, false, cx))
+    .act::<MoveEnd>(cx, |this, _, cx| this.step_line_edge(true, false, cx))
+    .act::<SelectHome>(cx, |this, _, cx| this.step_line_edge(false, true, cx))
+    .act::<SelectEnd>(cx, |this, _, cx| this.step_line_edge(true, true, cx))
+    .act::<SelectAll>(cx, |this, _, cx| this.select_all(cx))
+    .act::<Undo>(cx, |this, window, cx| this.undo(window, cx))
+    .act::<Redo>(cx, |this, window, cx| this.redo(window, cx))
+    .act::<DeleteWordBackward>(cx, |this, window, cx| this.delete_word_backward(window, cx))
+    .act::<DeleteWordForward>(cx, |this, window, cx| this.delete_word_forward(window, cx))
+    .act::<DeleteLineBackward>(cx, |this, window, cx| this.delete_line_backward(window, cx))
+    .format::<ToggleBold>(cx, |this, window, cx| {
+        this.toggle_mark(Mark::Bold, window, cx)
+    })
+    .format::<ToggleItalic>(cx, |this, window, cx| {
+        this.toggle_mark(Mark::Italic, window, cx)
+    })
+    .format::<ToggleUnderline>(cx, |this, window, cx| {
+        this.toggle_mark(Mark::Underline, window, cx)
+    })
+    .format::<ToggleStrikethrough>(cx, |this, window, cx| {
+        this.toggle_mark(Mark::Strikethrough, window, cx)
+    })
+    .format::<ToggleCode>(cx, |this, window, cx| {
+        this.toggle_mark(Mark::Code, window, cx)
+    })
+    .format::<EditLink>(cx, |this, _, cx| this.open_link(cx))
+    .on_action(cx.listener(|this, _: &Copy, _, cx| {
+        if !this.modal() {
+            this.copy(cx);
+        }
     }))
-    .on_action(cx.listener(|this, _: &SelectDown, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_vertical(true, true, cx);
+    .on_action(cx.listener(|this, _: &Cut, window, cx| {
+        if !this.modal() {
+            this.cut(window, cx);
+        }
     }))
-    .on_action(cx.listener(|this, _: &MoveHome, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_line_edge(false, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &MoveEnd, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_line_edge(true, false, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectHome, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_line_edge(false, true, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectEnd, window, cx| {
-        this.commit_marked(window, cx);
-        this.step_line_edge(true, true, cx);
-    }))
-    .on_action(cx.listener(|this, _: &SelectAll, window, cx| {
-        this.commit_marked(window, cx);
-        this.select_all(cx);
-    }))
-    .on_action(cx.listener(|this, _: &Undo, window, cx| {
-        this.commit_marked(window, cx);
-        this.undo(window, cx);
-    }))
-    .on_action(cx.listener(|this, _: &Redo, window, cx| {
-        this.commit_marked(window, cx);
-        this.redo(window, cx);
-    }))
-    .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(cx)))
-    .on_action(cx.listener(|this, _: &Cut, window, cx| this.cut(window, cx)))
     .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
 }

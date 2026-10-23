@@ -10,6 +10,7 @@ use gpui_kit::{
 };
 
 use super::BlockEditor;
+use super::cull::Class;
 use super::frame::{CARET_WIDTH, Frame, leaf_key};
 use super::palette::Palette;
 
@@ -81,9 +82,19 @@ impl Element for EditorRoot {
             })
             .collect();
         let rows = state.row_bounds.take();
+        let workspace = state.model.read(cx).workspace();
+        let changed = state.heights.borrow_mut().observe(&rows, |block| {
+            workspace.block(block).map(|found| Class::of(&found.kind))
+        });
+        state.layout_changed.set(changed);
         let frame = Frame::new(leaves, rows);
         *state.frame.borrow_mut() = frame;
         state.reveal_caret(window);
+        state.settle_culling(window);
+        state.refresh_drop(cx);
+        if state.auto_scroll(window) {
+            self.follow_pointer(window, cx);
+        }
         Prepaint {
             hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
         }
@@ -109,6 +120,10 @@ impl Element for EditorRoot {
         child.paint(window, cx);
         self.paint_composition(window, cx);
         self.paint_caret(window, cx);
+        self.paint_drop(window, cx);
+        if let Some(report) = self.editor.read(cx).first_paint.finish() {
+            eprintln!("{report}");
+        }
     }
 }
 
@@ -130,14 +145,46 @@ impl EditorRoot {
             if phase != DispatchPhase::Bubble || event.pressed_button != Some(MouseButton::Left) {
                 return;
             }
-            editor.update(cx, |this, cx| this.mouse_drag(event.position, window, cx));
+            editor.update(cx, |this, cx| {
+                this.pointer.set(Some(event.position));
+                this.mouse_drag(event.position, window, cx)
+            });
         });
         let editor = self.editor.clone();
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
             if phase == DispatchPhase::Bubble {
-                editor.update(cx, |this, _| this.dragging = false);
+                editor.update(cx, |this, _| {
+                    this.dragging = false;
+                    if this.drag_block.get().is_none() {
+                        this.pointer.set(None);
+                    }
+                });
             }
         });
+    }
+
+    fn follow_pointer(&self, window: &mut Window, cx: &mut App) {
+        let editor = self.editor.clone();
+        window.defer(cx, move |window, cx| {
+            editor.update(cx, |this, cx| {
+                if let Some(pointer) = this.pointer.get().filter(|_| this.dragging) {
+                    this.mouse_drag(pointer, window, cx);
+                }
+            });
+        });
+    }
+
+    fn paint_drop(&self, window: &mut Window, cx: &mut App) {
+        let Some(mark) = self.editor.read(cx).drop.get() else {
+            return;
+        };
+        window.paint_quad(fill(
+            Bounds::new(
+                point(mark.x, mark.y - px(1.)),
+                size((mark.right - mark.x).max(px(0.)), px(2.)),
+            ),
+            self.palette.accent,
+        ));
     }
 
     fn paint_composition(&self, window: &mut Window, cx: &mut App) {

@@ -9,6 +9,7 @@ use gpui_kit::{
 };
 use remindr_core::domain::{BlockId, BlockKind, DatabaseId};
 
+use super::drag::{DragPreview, DraggedBlock};
 use super::frame::leaf_key;
 use super::palette::Palette;
 use super::rows::Row;
@@ -17,6 +18,8 @@ use super::{BlockEditor, open_page};
 pub const GUTTER: Pixels = px(24.);
 pub const INDENT: Pixels = px(24.);
 pub const LINE: Pixels = px(26.);
+const HANDLE_WIDTH: Pixels = px(18.);
+const HANDLE_HEIGHT: Pixels = px(22.);
 
 pub type RowBounds = Rc<RefCell<Vec<(BlockId, Bounds<Pixels>)>>>;
 
@@ -65,6 +68,7 @@ pub struct RowSpec {
     pub icon: Option<SharedString>,
     pub node: Option<BlockNode>,
     pub title: SharedString,
+    pub label: SharedString,
     pub selected: bool,
     pub open: bool,
 }
@@ -78,6 +82,14 @@ pub struct RowEnv<'a> {
 
 pub fn row_id(block: BlockId) -> String {
     format!("block-{}", block.as_uuid())
+}
+
+pub fn handle_id(block: BlockId) -> String {
+    format!("handle-{}", block.as_uuid())
+}
+
+fn group_id(block: BlockId) -> String {
+    format!("row-{}", block.as_uuid())
 }
 
 pub fn checkbox_id(block: BlockId) -> String {
@@ -115,6 +127,7 @@ pub fn row(
     div()
         .id(row_id(block))
         .test_support()
+        .group(group_id(block))
         .relative()
         .w_full()
         .flex()
@@ -123,7 +136,7 @@ pub fn row(
         .py(px(2.))
         .rounded(px(4.))
         .when(spec.selected, |this| this.bg(palette.selection))
-        .child(div().w(GUTTER).flex_none())
+        .child(gutter(block, spec.label.clone(), env))
         .child(div().w(INDENT * spec.row.depth as f32).flex_none())
         .child(body)
         .child(
@@ -135,6 +148,46 @@ pub fn row(
             .top_0()
             .left_0()
             .size_full(),
+        )
+        .into_any_element()
+}
+
+fn gutter(block: BlockId, label: SharedString, env: &RowEnv) -> AnyElement {
+    let editor = env.editor.clone();
+    let palette = *env.palette;
+    let group = group_id(block);
+    let handle = div()
+        .id(handle_id(block))
+        .opacity(0.)
+        .group_hover(group, |style| style.opacity(1.))
+        .on_drag(DraggedBlock { block }, move |_, _, _, cx| {
+            editor.update(cx, |this, _| this.begin_block_drag(block));
+            cx.new(|_| DragPreview::new(label.clone(), palette.muted, palette.foreground))
+        })
+        .test_support()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .cursor_grab()
+        .text_size(px(12.))
+        .text_color(palette.muted_foreground)
+        .hover(|style| style.bg(palette.muted))
+        .child("\u{22EE}\u{22EE}");
+    div()
+        .w(GUTTER)
+        .h(LINE)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(HANDLE_WIDTH)
+                .h(HANDLE_HEIGHT)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(handle),
         )
         .into_any_element()
 }

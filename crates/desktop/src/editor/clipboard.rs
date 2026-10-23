@@ -106,7 +106,7 @@ impl BlockEditor {
     }
 
     pub(super) fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if text.is_empty() {
+        if text.is_empty() || self.modal_text(text, cx) {
             return;
         }
         let Some(at) = self.insertion_point(window, cx) else {

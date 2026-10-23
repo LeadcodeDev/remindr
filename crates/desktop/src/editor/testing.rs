@@ -78,11 +78,11 @@ pub use fixture::Fixture;
 mod fixture {
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext, Bounds, Entity, Point, TestAppContext, Window,
+        AnyWindowHandle, App, AppContext, Bounds, ElementId, Entity, Point, TestAppContext, Window,
         WindowBounds, WindowOptions, px, size,
     };
-    use remindr_core::application::{Session, TextPoint};
-    use remindr_core::domain::{BlockId, BlockKind, Parent};
+    use remindr_core::application::{Command, Created, Session, TextPoint};
+    use remindr_core::domain::{BlockId, BlockKind, DatabaseId, Marks, Parent};
     use remindr_core::testing::MemoryStore;
 
     use super::Doc;
@@ -155,6 +155,24 @@ mod fixture {
             })
         }
 
+        pub fn spans(&self, cx: &mut TestAppContext, block: BlockId) -> Vec<(String, Marks)> {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .block(block)
+                    .map(|found| {
+                        found
+                            .text
+                            .spans()
+                            .iter()
+                            .map(|span| (span.text.clone(), span.marks.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+        }
+
         pub fn texts(&self, cx: &mut TestAppContext) -> Vec<String> {
             self.with(cx, |_, cx| {
                 let workspace = self.model.read(cx).workspace();
@@ -204,6 +222,86 @@ mod fixture {
                     .children(Parent::Block(parent))
                     .map(|found| found.text.to_plain())
                     .collect()
+            })
+        }
+
+        pub fn children_kinds(&self, cx: &mut TestAppContext, parent: BlockId) -> Vec<BlockKind> {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .children(Parent::Block(parent))
+                    .map(|found| found.kind.clone())
+                    .collect()
+            })
+        }
+
+        pub fn children_ids(&self, cx: &mut TestAppContext, parent: BlockId) -> Vec<BlockId> {
+            self.with(cx, |_, cx| {
+                self.model
+                    .read(cx)
+                    .workspace()
+                    .children(Parent::Block(parent))
+                    .map(|found| found.id)
+                    .collect()
+            })
+        }
+
+        pub fn create_database(&self, cx: &mut TestAppContext, name: &str) -> DatabaseId {
+            let created = self.with(cx, |_, cx| {
+                self.model
+                    .update(cx, |model, cx| model.execute(Command::CreateDatabase, cx))
+                    .expect("create database")
+                    .created
+            });
+            let database = created
+                .iter()
+                .find_map(|item| match item {
+                    Created::Database(id) => Some(*id),
+                    _ => None,
+                })
+                .expect("created database");
+            self.with(cx, |_, cx| {
+                self.model
+                    .update(cx, |model, cx| {
+                        model.execute(
+                            Command::RenameDatabase {
+                                database,
+                                name: name.to_owned(),
+                            },
+                            cx,
+                        )
+                    })
+                    .expect("rename database");
+            });
+            database
+        }
+
+        pub fn database_count(&self, cx: &mut TestAppContext) -> usize {
+            self.with(cx, |_, cx| {
+                self.model.read(cx).workspace().databases().count()
+            })
+        }
+
+        pub fn shown(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) -> bool {
+            let id = id.into();
+            self.with(cx, |window, cx| {
+                window.render_frame(cx);
+                window.try_find(id).is_some()
+            })
+        }
+
+        pub fn label_of(
+            &self,
+            cx: &mut TestAppContext,
+            id: impl Into<ElementId>,
+        ) -> Option<String> {
+            let id = id.into();
+            self.with(cx, |window, cx| {
+                window.render_frame(cx);
+                window
+                    .try_find(id)
+                    .and_then(|found| found.label().map(str::to_owned))
             })
         }
 
